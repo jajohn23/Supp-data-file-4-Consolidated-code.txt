@@ -1,0 +1,4737 @@
+Supplementary data file 4 - Consolidated code
+
+IMPORTANT NOTES:
+	-Each script contained in this file is separated by 30 newlines and a header surrounded by # symbols.
+	-All scripts were run on the following setup:
+		-Windows 10 x64 pc
+		-R Studio version 1.2.5019, running R version 3.6.2 (2019-12-12)
+		-SAS version 9.4
+	-For a full description of genotype plain text abbreviations, see Supplementary table S2
+	-The data of all necessary inputs can be found in the other supplementary files. To format the supplementary files to be able
+		to be processed by the scripts without changing the code, the respective supplementary Excel sheet must be converted into the
+		proper format (either .csv or tab-separated .txt) and the title rows removed.
+		-"Sex_ratio.csv" data can be found in "Supplementary data file 6 - Sex ratio experiment data.xlsx"
+		-"Starvation_resistance_female_mated_init_exps_on_ctrls.csv" and "Starvation_resistance_all_lines.csv" data can be found 
+			in "Supplementary data file 5 - Starvation resistance data.xlsx" (in different sheets)
+		-"RNAseq_raw_counts.txt" data can be found in "Supp data file 8 - RNA sequencing raw counts.xlsx"
+		-"RNAseq_metadata.txt" data can be found in "Supp data file 9 - RNA sequencing metadata.xlsx"
+	-The scripts and input files can be set up to reproduce the analyses by:
+		-Organizing them in folders in the following manner:
+			-./Organismal phenotype analysis/Starvation_resistance.SAS
+			-./Organismal phenotype analysis/Sex_ratio.SAS
+			-./Organismal phenotype analysis/Input_files/Starvation_resistance_female_mated_init_exps_on_ctrls.csv
+			-./Organismal phenotype analysis/Input_files/Starvation_resistance_all_lines.csv
+			-./Organismal phenotype analysis/Input_files/Sex_ratio.csv
+			-./RNAseq read count analysis/Pre_SAS.R
+			-./RNAseq read count analysis/SAS_code.SAS
+			-./RNAseq read count analysis/Post_SAS.R
+			-./RNAseq read count analysis/Input_files/RNAseq_raw_counts.txt
+			-./RNAseq read count analysis/Input_files/RNAseq_metadata.txt
+			-./RNAseq read count analysis/Input_files/Pre_SAS_plots.R
+			-./RNAseq read count analysis/Input_files/Redundant_Diverse.R
+			-./RNAseq read count analysis/Input_files/Additive_Epistatic.R
+			-./RNAseq read count analysis/Input_files/Redundant_Diverse.R
+			-./RNAseq read count analysis/Input_files/Redundant_Diverse_vs_Additive_Epistatic.R
+			-./RNAseq read count analysis/Input_files/Post_SAS_figure_panels.R
+			-./RNAseq read count analysis/Input_files/WGCNA_networks.R
+		-Executing the following main scripts in order (Starvation_resistance.SAS and Sex_ratio.SAS can be run in any order):
+			1. Pre_SAS.R
+			2. SAS_code.SAS
+			3. Post_SAS.R
+
+
+
+
+
+#################################
+##### Sex_ratio.SAS     #########
+#################################
+
+/*Importing the data (The data for Sex_ratio.csv can be found in Supplementary data file 6 - Sex ratio experiment data)*/
+PROC IMPORT DATAFILE='.\Input_files\Sex_ratio.csv'
+DBMS=CSV
+OUT=Sex_ratio;
+GETNAMES=YES;
+GUESSINGROWS=max;
+RUN;
+
+/*Sorting the data by Sex and FlyBase_ID for the BY statement in proc MIXED*/
+PROC SORT DATA = Sex_ratio OUT = Sex_ratio_sorted;
+BY Genotype Line Vial N_female N_male;
+
+/*Stacking the data*/
+proc transpose DATA=Sex_ratio_sorted OUT=Sex_ratio_stacked_init(rename=(_NAME_=Sex COL1=N_adults));
+    var N_female N_male;
+    BY Genotype Line Vial N_female N_male;
+run;
+
+/*Cleaning up and recoding the data*/
+data Sex_ratio_stacked;
+SET Sex_ratio_stacked_init;
+LABEL Sex=Sex;
+IF Sex="N_female" THEN Sex="female";
+IF Sex="N_male" THEN Sex="male";
+DROP N_female N_male;
+run;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;
+ods	output	NObs=NObs;
+ods	output	ConvergenceStatus=ConvergenceStatus;
+ods	output	FitStatistics=FitStatistics;
+ods	output	LSMeans=LSMeans;
+ods	output	LSMEstimates=LSMEstimates;
+ods	output	Coef=Coef;
+ods output	ModelANOVA=ModelANOVA;
+
+/*Defining and running the model and Least Squares Estimates*/
+proc logistic data=Sex_ratio_stacked;
+class Genotype Line Vial / param = glm;
+model Sex = Genotype Line(Genotype) Vial(Line Genotype);
+lsmeans Genotype;
+
+/*Planned contrasts*/
+lsmestimate Genotype 	'Obp50Pos - Obp50Neg' 		-1 0 1 0 0 0 0 0,
+						'Obp50a - Obp50Neg' 		-1 0 0 1 0 0 0 0,
+						'Obp50b - Obp50Neg' 		-1 0 0 0 1 0 0 0,
+						'Obp50c - Obp50Neg' 		-1 0 0 0 0 1 0 0,
+						'Obp50d - Obp50Neg' 		-1 0 0 0 0 0 0 1 / elsm;
+
+/*Planned test for epistasis*/
+/*Equivalent to Null Hypothesis: Pos-Neg = (a-Neg)+(b-Neg)+(c-Neg)+(d-Neg)*/
+lsmestimate Genotype	'additive_epistatic'	3 0 1 -1 -1 -1 0 -1 / elsm;
+
+/*Post-hoc tests*/
+lsmestimate Genotype 	'Obp50Pos - Obp50a' 		0 0 1 -1 0 0 0 0,
+						'Obp50Pos - Obp50d' 		0 0 1 0 0 0 0 -1,
+						'Obp50Pos - Obp50NegBCD' 	0 -1 1 0 0 0 0 0,
+						'Obp50cBCD - Obp50c' 		0 0 0 0 0 -1 1 0,
+						'Obp50cBCD - Obp50NegBCD' 	0 -1 0 0 0 0 1 0,
+						'Obp50NegBCD - Obp50Neg' 	-1 1 0 0 0 0 0 0,
+						'Obp50b - Obp50NegBCD' 		0 -1 0 0 1 0 0 0 / elsm adjust=bon stepdown;
+freq N_adults;
+run;
+
+/*Creating a new folder and subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\Sex_ratio_results";
+libname newdir ".\Sex_ratio_results\Main_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\Sex_ratio_results\Main_results\ModelInfo.csv'	dbms=csv replace; run;		
+proc	export	data=NObs	outfile='.\Sex_ratio_results\Main_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=ConvergenceStatus	outfile='.\Sex_ratio_results\Main_results\ConvergenceStatus.csv'	dbms=csv replace; run;
+proc	export	data=FitStatistics	outfile='.\Sex_ratio_results\Main_results\FitStatistics.csv'	dbms=csv replace; run;
+proc	export	data=LSMeans	outfile='.\Sex_ratio_results\Main_results\LSMeans.csv'	dbms=csv replace; run;	
+proc	export	data=LSMEstimates	outfile='.\Sex_ratio_results\Main_results\LSMEstimates.csv'	dbms=csv replace; run;
+proc	export	data=Coef	outfile='.\Sex_ratio_results\Main_results\Coef.csv'	dbms=csv replace; run;
+proc	export	data=ModelANOVA	outfile='.\Sex_ratio_results\Main_results\ModelANOVA.csv'	dbms=csv replace; run;
+
+
+
+/*Subsetting the data to compare the individual paralog genotypes to one another*/
+/*to test for functional diversification*/
+data Sex_ratio_abcd;
+   set Sex_ratio_stacked;
+   where Genotype='Obp50a' or Genotype='Obp50b' or
+		 Genotype='Obp50c' or Genotype='Obp50d';
+run;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;
+ods	output	NObs=NObs;
+ods	output	ConvergenceStatus=ConvergenceStatus;
+ods	output	FitStatistics=FitStatistics;
+ods	output	LSMeans=LSMeans;
+ods output	ModelANOVA=ModelANOVA;
+
+/*Defining and running the model and Least Squares Estimates*/
+proc logistic data=Sex_ratio_abcd;
+class Genotype Line Vial / param = glm;
+model Sex = Genotype Line(Genotype) Vial(Line Genotype);
+lsmeans Genotype;
+freq N_adults;
+run;
+
+/*Creating a new subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\Sex_ratio_results\Redundant_vs_Diverse_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\ModelInfo.csv'	dbms=csv replace; run;			
+proc	export	data=NObs	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=ConvergenceStatus	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\ConvergenceStatus.csv'	dbms=csv replace; run;
+proc	export	data=FitStatistics	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\FitStatistics.csv'	dbms=csv replace; run;
+proc	export	data=LSMeans	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\LSMeans.csv'	dbms=csv replace; run;
+proc	export	data=ModelANOVA	outfile='.\Sex_ratio_results\Redundant_vs_Diverse_results\ModelANOVA.csv'	dbms=csv replace; run;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#########################################
+##### Starvation_resistance.SAS #########
+#########################################
+
+/*Importing the data (The data for Starvation_resistance_female_mated_init_exps_on_ctrls.csv can be found in Supplementary data file 5 - Starvation resistance data)*/
+PROC IMPORT DATAFILE='.\Input_files\Starvation_resistance_female_mated_init_exps_on_ctrls.csv'
+DBMS=CSV
+OUT=Starvation_resistance_ctrls;
+GETNAMES=YES;
+GUESSINGROWS=max;
+RUN;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;
+ods	output	ClassLevels=ClassLevels;
+ods	output	NObs=NObs;
+ods	output	ConvergenceStatus=ConvergenceStatus;
+ods	output	FitStatistics=FitStatistics;
+ods	output	LSMeans=LSMeans;
+ods output	Type3Analysis=Type3Analysis;
+
+/*Defining and running the Redundancy/Diversification model by Sex and Mated_status*/
+proc lifereg data=Starvation_resistance_ctrls;
+class Experiment Genotype Line;
+model Time_hrs*Censor(1) = Experiment Genotype Line(Genotype) / dist = logistic;
+lsmeans Genotype;
+run;
+
+/*Creating a new subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\Starvation_resistance_results\Init_exps_on_ctrls";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\ModelInfo.csv'	dbms=csv replace; run;
+proc	export	data=ClassLevels	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\ClassLevels.csv'	dbms=csv replace; run;				
+proc	export	data=NObs	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=ConvergenceStatus	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\ConvergenceStatus.csv'	dbms=csv replace; run;
+proc	export	data=FitStatistics	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\FitStatistics.csv'	dbms=csv replace; run;
+proc	export	data=LSMeans	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\LSMeans.csv'	dbms=csv replace; run;
+proc	export	data=Type3Analysis	outfile='.\Starvation_resistance_results\Init_exps_on_ctrls\Type3Analysis.csv'	dbms=csv replace; run;
+
+
+
+/*Importing the data (The data for Starvation_resistance_all_lines.csv can be found in Supplementary data file 5 - Starvation resistance data)*/
+PROC IMPORT DATAFILE='.\Input_files\Starvation_resistance_all_lines.csv'
+DBMS=CSV
+OUT=Starvation_resistance;
+GETNAMES=YES;
+GUESSINGROWS=max;
+RUN;
+
+/*Sorting the data by Sex and Mated_status for the BY statement*/
+PROC SORT DATA = Starvation_resistance OUT = Starvation_resistance_sorted;
+BY Sex Mated_status;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;
+ods	output	ClassLevels=ClassLevels;
+ods	output	NObs=NObs;
+ods	output	ConvergenceStatus=ConvergenceStatus;
+ods	output	FitStatistics=FitStatistics;
+ods	output	LSMeans=LSMeans;
+ods	output	LSMEstimates=LSMEstimates;
+ods	output	Coef=Coef;
+ods output	Type3Analysis=Type3Analysis;
+
+/*Defining and running the model and Least Squares Estimates by Sex and Mated_status*/
+proc lifereg data=Starvation_resistance_sorted;
+class Genotype Line;
+model Time_hrs*Censor(1) = Genotype Line(Genotype) / dist = logistic;
+lsmeans Genotype;
+
+/*Planned contrasts*/
+lsmestimate Genotype 	'Obp50Pos - Obp50Neg' 		-1 0 1 0 0 0 0 0,
+						'Obp50a - Obp50Neg' 		-1 0 0 1 0 0 0 0,
+						'Obp50b - Obp50Neg' 		-1 0 0 0 1 0 0 0,
+						'Obp50c - Obp50Neg' 		-1 0 0 0 0 1 0 0,
+						'Obp50d - Obp50Neg' 		-1 0 0 0 0 0 0 1 / elsm;
+
+/*Planned test for epistasis*/
+/*Equivalent to Null Hypothesis: Pos-Neg = (a-Neg)+(b-Neg)+(c-Neg)+(d-Neg)*/
+lsmestimate Genotype	'additive_epistatic'	3 0 1 -1 -1 -1 0 -1 / elsm;
+
+/*Post-hoc tests*/
+lsmestimate Genotype 	'Obp50Pos - Obp50d' 		0 0 1 0 0 0 0 -1,
+						'Obp50cBCD - Obp50c' 		0 0 0 0 0 -1 1 0,
+						'Obp50cBCD - Obp50NegBCD' 	0 -1 0 0 0 0 1 0,
+						'Obp50NegBCD - Obp50Neg' 	-1 1 0 0 0 0 0 0,
+						'Obp50b - Obp50NegBCD' 		0 -1 0 0 1 0 0 0 / elsm adjust=bon stepdown;
+
+BY Sex Mated_status;
+run;
+
+/*Creating a new folder and subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\Starvation_resistance_results";
+libname newdir ".\Starvation_resistance_results\Main_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\Starvation_resistance_results\Main_results\ModelInfo.csv'	dbms=csv replace; run;
+proc	export	data=ClassLevels	outfile='.\Starvation_resistance_results\Main_results\ClassLevels.csv'	dbms=csv replace; run;				
+proc	export	data=NObs	outfile='.\Starvation_resistance_results\Main_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=ConvergenceStatus	outfile='.\Starvation_resistance_results\Main_results\ConvergenceStatus.csv'	dbms=csv replace; run;
+proc	export	data=FitStatistics	outfile='.\Starvation_resistance_results\Main_results\FitStatistics.csv'	dbms=csv replace; run;
+proc	export	data=LSMeans	outfile='.\Starvation_resistance_results\Main_results\LSMeans.csv'	dbms=csv replace; run;	
+proc	export	data=LSMEstimates	outfile='.\Starvation_resistance_results\Main_results\LSMEstimates.csv'	dbms=csv replace; run;
+proc	export	data=Coef	outfile='.\Starvation_resistance_results\Main_results\Coef.csv'	dbms=csv replace; run;
+proc	export	data=Type3Analysis	outfile='.\Starvation_resistance_results\Main_results\Type3Analysis.csv'	dbms=csv replace; run;
+
+
+
+/*Subsetting the data to compare the individual paralog genotypes to one another*/
+/*to test for functional diversification*/
+data Starvation_resistance_abcd;
+   set Starvation_resistance_sorted;
+   where Genotype='Obp50a' or Genotype='Obp50b' or
+		 Genotype='Obp50c' or Genotype='Obp50d';
+run;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;
+ods	output	ClassLevels=ClassLevels;
+ods	output	NObs=NObs;
+ods	output	ConvergenceStatus=ConvergenceStatus;
+ods	output	FitStatistics=FitStatistics;
+ods	output	LSMeans=LSMeans;
+ods output	Type3Analysis=Type3Analysis;
+
+/*Defining and running the Redundancy/Diversification model by Sex and Mated_status*/
+proc lifereg data=Starvation_resistance_abcd;
+class Genotype Line;
+model Time_hrs*Censor(1) = Genotype Line(Genotype) / dist = logistic;
+lsmeans Genotype;
+BY Sex Mated_status;
+run;
+
+/*Creating a new subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\Starvation_resistance_results\Redundant_vs_Diverse_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\ModelInfo.csv'	dbms=csv replace; run;
+proc	export	data=ClassLevels	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\ClassLevels.csv'	dbms=csv replace; run;				
+proc	export	data=NObs	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=ConvergenceStatus	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\ConvergenceStatus.csv'	dbms=csv replace; run;
+proc	export	data=FitStatistics	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\FitStatistics.csv'	dbms=csv replace; run;
+proc	export	data=LSMeans	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\LSMeans.csv'	dbms=csv replace; run;
+proc	export	data=Type3Analysis	outfile='.\Starvation_resistance_results\Redundant_vs_Diverse_results\Type3Analysis.csv'	dbms=csv replace; run;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+############################################################################################################
+#####             Pre_SAS.R  (first main script to be executed to analyze RNAseq count data)       #########
+############################################################################################################
+####################################################################################################
+#								SETTINGS
+####################################################################################################
+
+################################### Development Only ##############################################
+
+# Specifies the number of gene rows to work with. FOR DEVELOPMENT ONLY.
+n_dataset_rows = NULL #To analyze all gene rows, set to NULL.
+
+
+
+################################### Input Settings #################################################
+
+# Specifies the filename of Combined_counts, which is a tab-delimited .txt file that contains
+# the raw counts and other non-count information for each gene. Each gene must correspond to 
+# a single row. The first [n_info_cols] columns (see below) must contain "FlyBase_ID" and "Length"
+# columns giving the FlyBase ID and gene length, respectively. All other columns must contain
+# raw counts, with sample names as column names. This file must be placed in the "Input_files"
+# folder, which itself MUST be placed in the same directory as this ("Pre_SAS.R") script.
+Combined_counts_filename = "RNAseq_raw_counts.txt" #This data can be found in Supplementary data file 8 - RNA sequencing raw counts
+
+# Specifies the number of columns in Combined_counts_filename which contain non-count gene
+# information. This number includes the first column of Combined_counts_filename, which must
+# be "FlyBase_ID".
+n_info_cols = 3
+
+# Specifies the filename of the col_info_df, which is a tab-delimited .txt file that holds information
+# about each sample column in Combined_counts.
+# This file must be placed in the "Input_files" folder, which itself MUST be placed in the same 
+# directory as this ("Pre_SAS.R") script.
+col_info_df_filename = "RNAseq_metadata.txt" #This data can be found in Supp data file 9 - RNA sequencing metadata
+
+# Specifies the column in col_info_df which contains the sample names.
+col_info_df_sample_name_col = "BAM_filename"
+
+# Specifies a list of columns in col_info_df which should be treated as factors. This is only 
+# necessary for columns which are not already strings.
+col_info_df_factor_lst = list("Line")
+
+# Determines whether the stacked normalized counts should be loaded instead of generated anew.
+# If TRUE and the "norm_counts_stacked.csv" file cannot be found, norm_counts_stacked will be
+# generated anew.
+load_norm_counts_stacked = TRUE
+
+# Known outlier Samples to remove
+outlier_sample_vec = c("55_S45_L001_sorted.bam", "J2_S52_L001_sorted.bam")
+
+
+
+################################### Output Settings ################################################
+
+# Gene rows which have less than this proportion of non-0 raw counts
+# among the sample columns will be excluded
+min_prop_above_0 = .25
+
+# Gene rows whose median raw count is less than this will be excluded
+min_median_count = 2
+
+# Determines the number to add prior to log transformations (used in visualization only)
+prior_count = 0.05
+
+# Determines which sex(es) to analyze. Filtering and Normalization will always occur on all samples 
+# so that it remains the same in all analyses.
+sex_vec = c("Female", "Male")
+
+# Determines which normalization method will be used
+norm_method = "GeTMM" #can be "GeTMM" or "RLE"
+
+# Setting each genotype's color
+genotype_col_lst = c(
+	"Obp50a"="#FFE600", #Golden Yellow
+	"Obp50b"="#00A651", #Pigment Green
+	"Obp50c"="#EC008C", #Hollywood Cerise
+	"Obp50cBCD"="#812990", #Vivid Violet
+	"Obp50d"="#00AEEF", #Deep Sky Blue
+	"Obp50Neg"="#005BAA", #Cobalt
+	"Obp50NegBCD"="#F58220", #Carrot Orange
+	"Obp50Pos"="#808080" #Trolley grey
+)
+
+
+
+####################################################################################################
+#								PACKAGE IMPORTS
+####################################################################################################
+
+library(readr)
+library(org.Dm.eg.db)
+library(edgeR)
+library(foreach) #For parallelizing code
+library(doParallel) #provides the parallel backend for the 'foreach' package
+library(openxlsx)
+
+
+
+####################################################################################################
+#								FUNCTION DEFINITIONS
+####################################################################################################
+
+# Function to create a folder if it doesn't exist.
+# folder:			A string specifying the desired folder name.
+create_folder_fn = function(folder){
+	ifelse(!dir.exists(file.path(getwd(),folder)), dir.create(file.path(getwd(),folder)), FALSE)
+}
+
+# Function to make a stacked dataset for SAS. May take a long time on a large dataset.
+# norm_counts_mat: 	The matrix of normalized counts, with all columns corresponding to a sample and 
+# 						every row corresponding to a gene. Must have column names.
+# row_info_df: 		A dataframe where nrow(row_info_df)==nrow(norm_counts_mat) which contains information on each gene.
+# col_info_df: 		A dataframe where nrow(col_info_df)==ncol(norm_counts_mat) which contains information on each sample.
+# Sample_colname: 	A string which specifies the desired name of the output column which will contain the sample names.
+# Response_colname: A string which specifies the desired name of the output column which will contain the normalized counts.
+# .inorder: 		Boolean. Setting .inorder=FALSE improves performance at the cost of returning results in a different order.
+stack_fn = function(norm_counts_mat, row_info_df, col_info_df, Sample_colname, Response_colname, .inorder=TRUE){
+	registerDoParallel() #as opposed to registerDoSEQ()
+	norm_counts_mat = as.data.frame(norm_counts_mat)
+	norm_counts_stacked = foreach(i=1:nrow(norm_counts_mat), .combine='rbind', .inorder=.inorder) %dopar% {
+		row_df = t(norm_counts_mat[i,])
+		colnames(row_df)[1] = Response_colname
+		rowname_df_row = row_info_df[i,]
+		name_col_df = rowname_df_row[rep(seq_len(nrow(rowname_df_row)), each = nrow(row_df)),]
+		temp_df = cbind(rownames(row_df), name_col_df, col_info_df, row_df)
+		colnames(temp_df)[1] = Sample_colname
+		return(temp_df)
+	}
+	rownames(norm_counts_stacked) = NULL
+	return(norm_counts_stacked)
+}
+
+
+
+####################################################################################################
+#									DATA IMPORTS
+####################################################################################################
+
+# Setting the working directory relative to this file's location
+file_location = dirname(parent.frame(2)[["ofile"]]) #gets filepath of this script if sourced in RStudio
+setwd(file_location) #This working directory is temporary to create the "Pre_SAS_results" folder.
+create_folder_fn("Pre_SAS_results")
+setwd("Pre_SAS_results") #Sets the working directory for the remainder of the script
+
+# Importing "Combined_counts.txt", the file with the raw read counts from all sample libraries
+Combined_counts = paste(file_location,"Input_files", Combined_counts_filename, sep="/")
+Combined_counts = read_delim(Combined_counts,"\t", escape_double = FALSE, trim_ws = TRUE)
+
+# Importing col_info_df_filename, the file with the metadata for each sample, as "col_info_df"
+col_info_df = paste(file_location,"Input_files", col_info_df_filename, sep="/")
+col_info_df = read.delim(col_info_df)
+
+
+
+####################################################################################################
+#									INITIAL PROCESSING
+####################################################################################################
+
+# Adding Entrez_ID column to Combined_counts
+Combined_counts = as.data.frame(Combined_counts)
+Combined_counts[["Entrez_ID"]] = as.list(as.list(org.Dm.egFLYBASE2EG)[Combined_counts[["FlyBase_ID"]]])
+Combined_counts[["Entrez_ID"]] = vapply(Combined_counts[["Entrez_ID"]],paste,collapse = ", ", character(1L))
+Combined_counts = Combined_counts[!duplicated(Combined_counts[["Entrez_ID"]]),] #Removing rows with duplicate Entrez_IDs
+Combined_counts = Combined_counts[c(ncol(Combined_counts),1:(ncol(Combined_counts)-1))] #Placing Entrez_ID column first
+
+# Removing "lncRNA:" in the Gene_symbol column
+Combined_counts[["Gene_symbol"]] = gsub("lncRNA:", "", Combined_counts[["Gene_symbol"]])
+
+# Creating a toy dataset from the top [n_dataset_rows] gene rows. FOR DEVELOPMENT ONLY.
+if (is.null(n_dataset_rows)){n_dataset_rows = nrow(Combined_counts)}
+Combined_counts = Combined_counts[1:n_dataset_rows,]
+
+# Defining raw_counts_df to include just the count columns of Combined_counts
+raw_counts_df = Combined_counts[,-c(1:(n_info_cols+1))]
+
+# Defining row_info_df to include just the non-count columns of Combined_counts
+row_info_df = Combined_counts[,1:(n_info_cols+1)]
+
+# Moving the col_info_df column containing the sample names (col_info_df_sample_name_col) to the row names.
+rownames(col_info_df) = col_info_df[[col_info_df_sample_name_col]]
+col_info_df[[col_info_df_sample_name_col]] = NULL
+
+# Defining specified columns in col_info_df as factors.
+if (is.null(col_info_df_factor_lst)){col_info_df_factor_lst = list()}
+for (column in col_info_df_factor_lst){
+	col_info_df[[column]] = as.factor(col_info_df[[column]])
+}
+
+# Defining a Combined_counts and col_info_df that lack known outlier samples
+if (length(outlier_sample_vec) > 0) {
+	Combined_counts = Combined_counts[,-(match(outlier_sample_vec, rownames(col_info_df)) + n_info_cols + 1)]
+	raw_counts_df = raw_counts_df[,-match(outlier_sample_vec, rownames(col_info_df))]
+	col_info_df = col_info_df[-match(outlier_sample_vec, rownames(col_info_df)),]
+}
+
+View(Combined_counts)
+View(raw_counts_df)
+View(row_info_df)
+View(col_info_df)
+
+# Exporting raw_counts_df
+write.csv(cbind(row_info_df, raw_counts_df), file="raw_counts_df.csv", row.names=FALSE)
+
+
+
+####################################################################################################
+#									FILTERING BY COUNTS
+####################################################################################################
+
+# Creating a logical vector (keep_rows_vec) which indicates the rows to keep
+keep_rows_min_prop_above_0 = apply(raw_counts_df, 1, function(row_){sum(row_ > 0)/ncol(raw_counts_df) >= min_prop_above_0})
+keep_rows_min_median_count = apply(raw_counts_df, 1, function(row_){median(row_) >= min_median_count})
+keep_rows_vec = keep_rows_min_prop_above_0 & keep_rows_min_median_count
+
+# Using the keep_rows_vec logical vector to apply the filtering criteria
+filtered_counts_df = raw_counts_df[keep_rows_vec,]
+row_info_df = row_info_df[keep_rows_vec,]
+
+# Exporting filtered_counts_df
+write.csv(cbind(row_info_df, filtered_counts_df), file="filtered_counts_df.csv", row.names=FALSE)
+
+
+
+####################################################################################################
+#									NORMALIZATION
+####################################################################################################
+
+# Applying TMM normalization to the filtered counts
+# Note that both TMM and RLE normalization methods assume that most genes
+# are not differentially expressed, and that for those that are, there is an
+# approximately equal number of over- and under-expressed genes (Robinson & Oshlack, 2010; Anders & 
+# Huber, 2010; Dillies et al., 2013; Evans et al., 2018).
+
+if (norm_method == "GeTMM"){
+# GeTMM normalization (Smid, M. et al., 2018)
+Pre_SAS_plots_folder = "GeTMM Pre_SAS.R Plots"
+rpk = filtered_counts_df/row_info_df[["Length"]]
+faux_group = c(rep("faux", ncol(filtered_counts_df)))
+rpk_norm = DGEList(counts=rpk, group=faux_group)
+rpk_norm = calcNormFactors(rpk_norm)
+norm_counts_mat = cpm(rpk_norm)
+View(norm_counts_mat)
+}
+
+if (norm_method == "RLE"){
+# RLE (DESeq) normalization
+Pre_SAS_plots_folder = "RLE Pre_SAS.R Plots"
+DGEList_obj = DGEList(filtered_counts_df, genes=row_info_df, samples=col_info_df)
+DGEList_obj = calcNormFactors(DGEList_obj, method="RLE")
+norm_counts_mat = rpkm(DGEList_obj, normalized.lib.sizes=TRUE)
+}
+
+
+
+####################################################################################################
+#									FILTERING BY SEX
+####################################################################################################
+
+# Filtering col_info_df and the columns of count-containing dataframes/matrices (except Combined_counts) 
+# to include only the sex(es) in sex_vec
+raw_counts_df = raw_counts_df[,col_info_df[["Sex"]] %in% sex_vec]
+filtered_counts_df = filtered_counts_df[,col_info_df[["Sex"]] %in% sex_vec]
+norm_counts_mat = norm_counts_mat[,col_info_df[["Sex"]] %in% sex_vec]
+col_info_df = col_info_df[col_info_df[["Sex"]] %in% sex_vec,]
+
+
+
+####################################################################################################
+#									VISUALIZATION
+####################################################################################################
+
+create_folder_fn(Pre_SAS_plots_folder)
+source(paste(file_location, "Input_files/Pre_SAS_plots.R", sep="/"))
+
+
+
+####################################################################################################
+#									DATA EXPORTS
+####################################################################################################
+
+# Exporting Combined_counts with the Entrez_ID column
+write.csv(Combined_counts, file="Combined_counts_w_Entrez.csv", row.names=FALSE)
+
+# Exporting norm_counts_mat
+write.csv(cbind(row_info_df, norm_counts_mat), file="norm_counts_mat.csv", row.names=FALSE)
+
+# Stacking norm_counts_mat and exporting to .csv for SAS to process.
+if (load_norm_counts_stacked) {
+	print("Loading norm_counts_stacked")
+	norm_counts_stacked = tryCatch(
+		read.table(paste(file_location, "Pre_SAS_results", "SAS_input", "norm_counts_stacked.csv", sep="/"), header=TRUE, sep=","),
+		error = function(e){
+			print("Could not find 'norm_counts_stacked.csv'. Generating norm_counts_stacked anew.")
+			stack_fn(norm_counts_mat, row_info_df, col_info_df, col_info_df_sample_name_col, "norm_counts", .inorder=FALSE)
+		}
+	)
+	print("Successfully generated norm_counts_stacked")
+} else {
+	print("Generating norm_counts_stacked")
+	norm_counts_stacked = stack_fn(norm_counts_mat, row_info_df, col_info_df, col_info_df_sample_name_col, "norm_counts", .inorder=FALSE)
+	print("Successfully generated norm_counts_stacked")
+}
+
+# Exporting norm_counts_stacked for SAS to process
+create_folder_fn("SAS_input")
+write.csv(norm_counts_stacked, file="SAS_input/norm_counts_stacked.csv", row.names=FALSE)
+
+# Exporting objects for Post_proc_GLM.R
+create_folder_fn("Post_SAS_input")
+save(norm_counts_mat, row_info_df, col_info_df, sex_vec, outlier_sample_vec, file="Post_SAS_input/Norm_count_info.RData")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+####################################################################
+#####        Pre_SAS_plots.R   (sourced by Pre_SAS.R)      #########
+####################################################################
+####################################################################################################
+#								HISTOGRAMS
+####################################################################################################
+
+# Plotting the raw counts in a histogram
+pdf(paste(Pre_SAS_plots_folder, sprintf("Raw_counts_histogram%s.pdf", norm_method), sep="/"))
+main = bquote('Raw')
+xlab = bquote('Log'[2]*'(Count + '~.(prior_count)*')')
+hist(log2(rowMeans(raw_counts_df + prior_count)), breaks=55, main="", xlab=xlab, ylab="", cex.axis=1.25, cex.lab=1.5, cex.main=1.75, font.main=1)
+dev.off()
+
+# Plotting the filtered counts in a histogram
+pdf(paste(Pre_SAS_plots_folder, sprintf("Filtered_counts_histogram%s.pdf", norm_method), sep="/"))
+main = bquote('Filtered')
+xlab = bquote('Log'[2]*'(Count + '~.(prior_count)*')')
+hist(log2(rowMeans(filtered_counts_df + prior_count)), breaks=55, main="", xlab=xlab, ylab="", cex.axis=1.25, cex.lab=1.5, cex.main=1.75, font.main=1)
+dev.off()
+
+# Plotting the normalized counts in a histogram
+pdf(paste(Pre_SAS_plots_folder, sprintf("Norm_counts_histogram%s.pdf", norm_method), sep="/"))
+main = bquote('Normalized')
+xlab = bquote('Log'[2]*'(Count + '~.(prior_count)*')')
+hist(log2(rowMeans(norm_counts_mat + prior_count)), breaks=55, main="", xlab=xlab, ylab="", cex.axis=1.25, cex.lab=1.5, cex.main=1.75, font.main=1)
+title()
+dev.off()
+
+
+
+####################################################################################################
+#									BOXPLOT
+####################################################################################################
+
+# Ordering the columns of norm_counts_mat for the boxplots
+col_info_df_ord = col_info_df[order(col_info_df$Sex, col_info_df$Genotype, col_info_df$Line),]
+norm_counts_mat_ord = norm_counts_mat[,order(col_info_df$Sex, col_info_df$Genotype, col_info_df$Line)]
+
+# Defining abbreviated labels for the boxplot
+Sex_abbr_vec = substr(col_info_df_ord[["Sex"]], 1, 1)
+Genotype_abbr_vec = col_info_df_ord[["Genotype"]]
+Line_abbr_vec = paste("L", col_info_df_ord[["Line"]], sep="")
+abbr_labels = paste(Sex_abbr_vec, Genotype_abbr_vec, Line_abbr_vec, sep="  ")
+
+# Boxplot of normalized counts with Sex, Genotype, and Line labels
+pdf(paste(Pre_SAS_plots_folder, sprintf("Boxplot.pdf", norm_method), sep="/"), width=6.75, height=6)
+par(mar=c(7.5,3.25,0.25,0.25))
+main=sprintf("%s-normalized Count Distributions by Sex, Genotype, & Line", norm_method)
+xlab = "Sex Genotype Line"
+ylab = bquote('Log'[2]*'('*.(norm_method)*'-normalized Count + '~.(prior_count)*')')
+boxplot(log2(norm_counts_mat_ord + prior_count), las=2, xaxt="n", main="")
+axis(1, las=2, labels=abbr_labels, at=1:ncol(norm_counts_mat_ord), cex.axis=.6)
+title(xlab=xlab, line=6.5)
+title(ylab=ylab, line=2)
+par(mar=c(5.1, 4.1, 4.1, 2.1))
+dev.off()
+
+
+
+####################################################################################################
+#						 MULTIDIMENSIONAL SCALING PLOT
+####################################################################################################
+
+DGEList_obj = DGEList(norm_counts_mat, genes=row_info_df, samples=col_info_df)
+pdf(paste(Pre_SAS_plots_folder, "MDS_plot_by_genotype_line_norm_counts_symbols.pdf", sep="/"), width=8, height=8.5)
+par(fin=c(7,7), fig=c(0,7/8,0,1))
+main = "Multidimensional Scaling Plot by Genotype and Line"
+genotype = as.factor(col_info_df$Genotype)
+legend_genotype = as.factor(c(1,1,2,2,3,3,4,4,5,6,6,7,7,8))
+plot_factor = paste(col_info_df$Genotype, col_info_df$Line)
+plot_factor = as.factor(plot_factor)
+len = length(levels(plot_factor))
+pch = c(1:len)
+col = genotype_col_lst
+plotMDS(DGEList_obj, pch=pch[plot_factor], col=col[genotype], main="")
+legend("topleft", inset=c(1, 0), legend=levels(plot_factor), pch=pch, ncol=1, col=col[legend_genotype], cex=.8, pt.cex=1, bty = "n", xpd=NA)
+dev.off()
+
+
+
+####################################################################################################
+#									DENDROGRAM
+####################################################################################################
+
+label = paste(
+	substr(col_info_df[["Sex"]], 1, 1), 
+	col_info_df[["Genotype"]], 
+	paste("L", col_info_df[["Line"]], sep="")
+)
+t_norm_counts_mat = t(norm_counts_mat)
+pdf(paste(Pre_SAS_plots_folder, "Full Dendrogram by Sample.pdf", sep="/"), height=3.75, width=6.75)
+par(cex = 0.6, mar=c(1,4.2,0,0))
+dendrogram = hclust(dist(t_norm_counts_mat), method = "average")
+plot(dendrogram, main = "", sub="", xlab="", label=label, cex=.85)
+dev.off()
+par(cex=1, mar=c(5.1, 4.1, 4.1, 2.1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+##############################################################################################################
+#####        SAS_code.SAS    (second main script to be executed to analyze RNAseq count data)        #########
+##############################################################################################################
+/*Importing the data*/
+PROC IMPORT DATAFILE='./Pre_SAS_results/SAS_input/norm_counts_stacked.csv'
+DBMS=CSV
+OUT=norm_counts_stacked replace;
+GETNAMES=YES;
+GUESSINGROWS=max;
+RUN;
+
+/*Sorting the data by Sex and FlyBase_ID for the BY statement in proc MIXED*/
+PROC SORT DATA = norm_counts_stacked OUT = norm_counts_sorted;
+BY FlyBase_ID;
+
+/*Causing the "Tests3" dataset's p-values to be in scientific notation*/
+PROC template;
+edit stat.mixed.ftests; edit ProbF; format=E12.; end; end;
+edit Stat.Mixed.Tests3; parent = Stat.Mixed.FTests; end;
+run;
+
+/*Causing the "LSMEstimates" dataset's p-values to be in scientific notation*/
+PROC template;
+edit Stat.LMR.tTests; edit Probt; format=E12.; end; end;
+edit Stat.Mixed.LSMEstimates; parent = Stat.LMR.tTests; end;
+run;
+
+/*Prevents SAS from generating HTML output for viewing in the Results Viewer window.*/
+/*This speeds up the code significantly.*/
+ODS RESULTS OFF;
+
+/*Suppressing notes from being written to the Log*/
+/*Otherwise, the Log fills up and requires user input to complete.*/
+options nonotes;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;			
+ods	output	ClassLevels=ClassLevels;			
+ods	output	Dimensions=Dimensions;			
+ods	output	NObs=NObs;			
+ods	output	IterHistory=IterHistory;			
+ods	output	ConvergenceStatus=ConvergenceStatus;			
+ods	output	CovParms=CovParms;			
+ods	output	FitStatistics=FitStatistics;			
+ods	output	SolutionF=SolutionF;		
+ods	output	Tests3=Tests3;
+ods	output	LSMeans=LSMeans;
+ods	output	LSMEstimates=LSMEstimates;
+ods	output	Coef=Coef;
+ods	output	SolutionR=SolutionR;
+
+/*Defining and running the model and Least Squares Estimates for each gene (FlyBase_ID)*/
+proc	MIXED	data=norm_counts_sorted;				
+class	FlyBase_ID	Sex	Genotype	Line;	
+model	norm_counts	= Sex|Genotype	/	ddfm=satterth	s;
+random	Line(Genotype) Sex*Line(Genotype) / s;
+lsmeans Sex*Genotype;
+
+lsmestimate Sex*Genotype 	'Female.Obp50Pos - Female.Obp50Neg' 		-1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50a - Female.Obp50Neg' 		-1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50b - Female.Obp50Neg' 		-1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50c - Female.Obp50Neg' 		-1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50d - Female.Obp50Neg' 		-1 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0,
+							'Female.Obp50cBCD - Female.Obp50c' 		0 0 0 0 0 -1 1 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50cBCD - Female.Obp50NegBCD' 	0 -1 0 0 0 0 1 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50NegBCD - Female.Obp50Neg' 	-1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0,
+							'Female.Obp50b - Female.Obp50NegBCD' 	0 -1 0 0 1 0 0 0 0 0 0 0 0 0 0 0,
+
+							'Male.Obp50Pos - Male.Obp50Neg' 		0 0 0 0 0 0 0 0 -1 0 1 0 0 0 0 0,
+							'Male.Obp50a - Male.Obp50Neg' 		0 0 0 0 0 0 0 0 -1 0 0 1 0 0 0 0,
+							'Male.Obp50b - Male.Obp50Neg' 		0 0 0 0 0 0 0 0 -1 0 0 0 1 0 0 0,
+							'Male.Obp50c - Male.Obp50Neg' 		0 0 0 0 0 0 0 0 -1 0 0 0 0 1 0 0,
+							'Male.Obp50d - Male.Obp50Neg' 		0 0 0 0 0 0 0 0 -1 0 0 0 0 0 0 1,
+							'Male.Obp50cBCD - Male.Obp50c' 		0 0 0 0 0 0 0 0 0 0 0 0 0 -1 1 0,
+							'Male.Obp50cBCD - Male.Obp50NegBCD' 	0 0 0 0 0 0 0 0 0 -1 0 0 0 0 1 0,
+							'Male.Obp50NegBCD - Male.Obp50Neg' 	0 0 0 0 0 0 0 0 -1 1 0 0 0 0 0 0,
+							'Male.Obp50b - Male.Obp50NegBCD' 	0 0 0 0 0 0 0 0 0 -1 0 0 1 0 0 0 / elsm;
+
+/*Least Squares Means Estimates to test for epistatic effects by sex*/
+/*Equivalent to (Pos-Neg)-[(a-Neg)+(b-Neg)+(c-Neg)+(d-Neg)]*/
+lsmestimate Sex*Genotype 	'Female_additive_epistatic' 3 0 1 -1 -1 -1 0 -1 0 0 0  0  0  0 0  0,
+							'Male_additive_epistatic' 	 0 0 0  0  0  0 0  0 3 0 1 -1 -1 -1 0 -1 / elsm;
+
+BY	FlyBase_ID;	
+run;
+
+/*Restoring default option to write all notes to the Log*/
+options notes;
+
+/*Creating a new folder and subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\SAS_results";
+libname newdir ".\SAS_results\Main_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\SAS_results\Main_results\ModelInfo.csv'	dbms=csv replace; run;
+proc	export	data=ClassLevels	outfile='.\SAS_results\Main_results\ClassLevels.csv'	dbms=csv replace; run;				
+proc	export	data=Dimensions	outfile='.\SAS_results\Main_results\Dimensions.csv'	dbms=csv replace; run;
+proc	export	data=NObs	outfile='.\SAS_results\Main_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=IterHistory	outfile='.\SAS_results\Main_results\IterHistory.csv'	dbms=csv replace; run;			
+proc	export	data=ConvergenceStatus	outfile='.\SAS_results\Main_results\ConvergenceStatus.csv'	dbms=csv replace; run;		
+proc	export	data=CovParms	outfile='.\SAS_results\Main_results\CovParms.csv'	dbms=csv replace; run;		
+proc	export	data=FitStatistics	outfile='.\SAS_results\Main_results\FitStatistics.csv'	dbms=csv replace; run;		
+proc	export	data=SolutionF	outfile='.\SAS_results\Main_results\SolutionF.csv'	dbms=csv replace; run;			
+proc	export	data=Tests3	outfile='.\SAS_results\Main_results\Tests3.csv'	dbms=csv replace; run;			
+proc	export	data=LSMeans	outfile='.\SAS_results\Main_results\LSMeans.csv'	dbms=csv replace; run;	
+proc	export	data=LSMEstimates	outfile='.\SAS_results\Main_results\LSMEstimates.csv'	dbms=csv replace; run;
+proc	export	data=Coef	outfile='.\SAS_results\Main_results\Coef.csv'	dbms=csv replace; run;
+proc	export	data=SolutionR	outfile='.\SAS_results\Main_results\SolutionR.csv'	dbms=csv replace; run;
+
+
+
+/*Subsetting the data to compare the individual paralog genotypes to one another*/
+/*to test for functional diversification*/
+data norm_counts_stacked_abcd;
+   set norm_counts_stacked;
+   where Genotype='Obp50a' or Genotype='Obp50b' or
+		 Genotype='Obp50c' or Genotype='Obp50d';
+run;
+
+/*Sorting the data by Sex and FlyBase_ID for the BY statement in proc MIXED*/
+PROC SORT DATA = norm_counts_stacked_abcd OUT = norm_counts_sorted_abcd;
+BY Sex FlyBase_ID;
+
+/*Collecting output into datasets for later exportation*/
+ods	output	ModelInfo=ModelInfo;			
+ods	output	ClassLevels=ClassLevels;			
+ods	output	Dimensions=Dimensions;			
+ods	output	NObs=NObs;			
+ods	output	IterHistory=IterHistory;			
+ods	output	ConvergenceStatus=ConvergenceStatus;			
+ods	output	CovParms=CovParms;			
+ods	output	FitStatistics=FitStatistics;			
+ods	output	SolutionF=SolutionF;		
+ods	output	Tests3=Tests3;
+ods	output	LSMeans=LSMeans;
+ods	output	SolutionR=SolutionR;
+
+/*Suppressing notes from being written to the Log*/
+/*Otherwise, the Log fills up and requires user input to complete.*/
+options nonotes;
+
+/*Defining the Redundancy/Diversification model, the contrasts, and running them for each sex and gene (FlyBase_ID)*/
+proc	MIXED	data=norm_counts_sorted_abcd;				
+class	FlyBase_ID	Sex	Genotype	Line;	
+model	norm_counts	= Genotype	/	ddfm=satterth	s;
+random	Line(Genotype) / s;
+lsmeans Genotype;
+BY	Sex FlyBase_ID;
+run;
+
+/*Restoring default option to write all notes to the Log*/
+options notes;
+
+/*Creating a new subfolder into which the saved datasets will be exported*/
+options dlcreatedir;
+libname newdir ".\SAS_results\Redundant_vs_Diverse_results";
+
+/*Exporting the generated results datasets*/
+proc	export	data=ModelInfo	outfile='.\SAS_results\Redundant_vs_Diverse_results\ModelInfo.csv'	dbms=csv replace; run;
+proc	export	data=ClassLevels	outfile='.\SAS_results\Redundant_vs_Diverse_results\ClassLevels.csv'	dbms=csv replace; run;				
+proc	export	data=Dimensions	outfile='.\SAS_results\Redundant_vs_Diverse_results\Dimensions.csv'	dbms=csv replace; run;
+proc	export	data=NObs	outfile='.\SAS_results\Redundant_vs_Diverse_results\NObs.csv'	dbms=csv replace; run;		
+proc	export	data=IterHistory	outfile='.\SAS_results\Redundant_vs_Diverse_results\IterHistory.csv'	dbms=csv replace; run;			
+proc	export	data=ConvergenceStatus	outfile='.\SAS_results\Redundant_vs_Diverse_results\ConvergenceStatus.csv'	dbms=csv replace; run;		
+proc	export	data=CovParms	outfile='.\SAS_results\Redundant_vs_Diverse_results\CovParms.csv'	dbms=csv replace; run;		
+proc	export	data=FitStatistics	outfile='.\SAS_results\Redundant_vs_Diverse_results\FitStatistics.csv'	dbms=csv replace; run;		
+proc	export	data=SolutionF	outfile='.\SAS_results\Redundant_vs_Diverse_results\SolutionF.csv'	dbms=csv replace; run;			
+proc	export	data=Tests3	outfile='.\SAS_results\Redundant_vs_Diverse_results\Tests3.csv'	dbms=csv replace; run;			
+proc	export	data=LSMeans	outfile='.\SAS_results\Redundant_vs_Diverse_results\LSMeans.csv'	dbms=csv replace; run;
+proc	export	data=SolutionR	outfile='.\SAS_results\Redundant_vs_Diverse_results\SolutionR.csv'	dbms=csv replace; run;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#######################################################################################################################
+#####           Post_SAS.R    (third and final main script to be executed to analyze RNAseq count data)       #########
+#######################################################################################################################
+####################################################################################################
+#								NOTES
+####################################################################################################
+
+# The transcriptional niche code assumes that the LSMEst format is "[Sex].[paralog] - [Sex].[control]"
+
+
+
+####################################################################################################
+#								SETTINGS
+####################################################################################################
+
+set.seed(106)
+alpha = 0.05
+prior_count = 0.05 #Determines the number to add prior to log transformations (visualization only)
+
+include_Pos_Tniche = TRUE #If TRUE, then the Obp50Pos genotype's transcriptional niche is also plotted
+RNAseq_plots = TRUE
+	figure_panels = TRUE #Requires that RNAseq_plots, redundant_diverse_analysis, and additive_epistatic_analysis are TRUE
+
+generate_transcriptional_niches = TRUE
+	venn_diagrams = TRUE #Requires that generate_transcriptional_niches is TRUE
+	redundant_diverse_analysis = TRUE #Requires that generate_transcriptional_niches is TRUE
+	additive_epistatic_analysis = TRUE #Requires that generate_transcriptional_niches is TRUE
+	WGCNA_networks = TRUE #Requires that generate_transcriptional_niches is TRUE
+
+
+fixed_effects_vec = c("Sex", "Genotype", "Sex*Genotype")
+
+# The LSMEst names must match the LSMEst labels in the SAS code
+# NOTE: the definition of transcriptional niches assumes that the paralog will be the
+# first "[Sex].[Genotype]" in the LSMEst, which is of the form "[Sex].[Genotype] - [Sex].[Genotype]"
+
+LSMEst_vec_lst = list()
+LSMEst_vec_lst[["Female"]] = c(
+'Female.Obp50a - Female.Obp50Neg',
+'Female.Obp50b - Female.Obp50Neg',
+'Female.Obp50c - Female.Obp50Neg',
+'Female.Obp50d - Female.Obp50Neg',
+'Female.Obp50Pos - Female.Obp50Neg',
+'Female.Obp50cBCD - Female.Obp50c',
+'Female.Obp50cBCD - Female.Obp50NegBCD',
+'Female.Obp50NegBCD - Female.Obp50Neg',
+'Female.Obp50b - Female.Obp50NegBCD')
+
+LSMEst_vec_lst[["Male"]] = c(
+'Male.Obp50a - Male.Obp50Neg',
+'Male.Obp50b - Male.Obp50Neg',
+'Male.Obp50c - Male.Obp50Neg',
+'Male.Obp50d - Male.Obp50Neg',
+'Male.Obp50Pos - Male.Obp50Neg',
+'Male.Obp50cBCD - Male.Obp50c',
+'Male.Obp50cBCD - Male.Obp50NegBCD',
+'Male.Obp50NegBCD - Male.Obp50Neg',
+'Male.Obp50b - Male.Obp50NegBCD')
+
+F_Tniche_LSMEst_name_vec = c(
+'Female.Obp50a - Female.Obp50Neg',
+'Female.Obp50b - Female.Obp50Neg',
+'Female.Obp50c - Female.Obp50Neg',
+'Female.Obp50d - Female.Obp50Neg')
+
+M_Tniche_LSMEst_name_vec = c(
+'Male.Obp50a - Male.Obp50Neg',
+'Male.Obp50b - Male.Obp50Neg',
+'Male.Obp50c - Male.Obp50Neg',
+'Male.Obp50d - Male.Obp50Neg')
+
+F_ctrl_Tniche_LSMEst_name = 'Female.Obp50Pos - Female.Obp50Neg'
+M_ctrl_Tniche_LSMEst_name = 'Male.Obp50Pos - Male.Obp50Neg'
+
+# Defining the expressions used to represent the genotypes in the figures
+genotype_label_lst = list(
+	"Obp50a"=bquote(italic(Obp50a)^"+"*italic(b)^"-"*italic(c)^"-"*italic(d)^"-"),
+	"Obp50b"=bquote(italic(Obp50a)^"-"*italic(b)^"+"*italic(c)^"-"*italic(d)^"-"),
+	"Obp50cBCD"=bquote(italic(Obp50a)^"-"*italic(b)^"CD"*italic(c)^"+"*italic(d)^"-"),
+	"Obp50c"=bquote(italic(Obp50a)^"-"*italic(b)^"-"*italic(c)^"+"*italic(d)^"-"),
+	"Obp50d"=bquote(italic(Obp50a)^"-"*italic(b)^"-"*italic(c)^"-"*italic(d)^"+"),
+	"Obp50NegBCD"=bquote(italic(Obp50a)^"-"*italic(b)^"CD"*italic(c)^"-"*italic(d)^"-"),
+	"Obp50Neg"=bquote(italic(Obp50a)^"-"*italic(b)^"-"*italic(c)^"-"*italic(d)^"-"),
+	"Obp50Pos"=bquote(italic(Obp50a)^"+"*italic(b)^"+"*italic(c)^"+"*italic(d)^"+")
+)
+
+# Defining the individual paralog genotypes
+paralog_genotype_vec = c("Obp50a", "Obp50b", "Obp50c", "Obp50d")
+
+# Defining a vector containing the italicized individual paralog genotypes
+Tniche_genotypes_italic = c()
+for (genotype in paralog_genotype_vec){
+	genotype_italic = bquote(italic(.(genotype)))
+	Tniche_genotypes_italic = c(Tniche_genotypes_italic, genotype_italic)
+}
+
+# Defining the positive control genotype and its italicized form
+Pos_ctrl_genotype = "Obp50Pos"
+Pos_ctrl_italic = bquote(italic(.("Obp50a-d")))
+
+# Defining the vectors with all the genotypes whose transcriptional niches
+# may be of interest
+Full_Tniche_genotype_vec = c(paralog_genotype_vec, Pos_ctrl_genotype)
+Full_Tniche_genotypes_italic = c(Tniche_genotypes_italic, Pos_ctrl_italic)
+
+# If the positive control's transcriptional niche is of interest, the genes
+# which belong solely to its niche will also be included in the analyses and
+# plots. Even if it is not of interest, however, the plots will still indicate 
+# whether or not each gene belongs to the positive control's niche.
+Tniche_genotype_vec = paralog_genotype_vec
+if (include_Pos_Tniche){
+	Tniche_genotype_vec = Full_Tniche_genotype_vec
+	Tniche_genotypes_italic = Full_Tniche_genotypes_italic
+}
+
+# Setting each genotype's color
+genotype_col_lst = c(
+	"Obp50a"="#FFE600", #Golden Yellow
+	"Obp50b"="#00A651", #Pigment Green
+	"Obp50cBCD"="#812990", #Vivid Violet
+	"Obp50c"="#EC008C", #Hollywood Cerise
+	"Obp50d"="#00AEEF", #Deep Sky Blue
+	"Obp50NegBCD"="#F58220", #Carrot Orange
+	"Obp50Neg"="#005BAA", #Cobalt
+	"Obp50Pos"="#808080" #Trolley grey
+)
+
+# Setting the network edge colors: Down (Cobalt) and Up (Alizarin).
+edge_col_vec = c("#005BAA", "#ED1C24")
+
+# Setting the network node border colors: Up and Down (Vivid Violet), Down (Cobalt), and Up (Alizarin)
+node_bord_col_vec = c("#812990", "#005BAA", "#ED1C24")
+
+# Creating a variant of genotype_col_lst whose names correspond to the names of the columns which
+# indicate membership in each transcriptional niche
+genotype_col_lst_tmp = genotype_col_lst
+names(genotype_col_lst_tmp) = paste(names(genotype_col_lst), "_Tniche", sep="")
+
+# Setting the positive and negative control genotypes for the additivity versus epistasis analysis.
+pos_ctrl_genotype = "Obp50Pos"
+neg_ctrl_genotype = "Obp50Neg"
+
+# Defining the RedDiv_df and AddEpi_df column names
+pval_colname = "pval"
+FDR_colname = "FDR"
+neg_log10_pval_colname = "neg_log10_pval"
+diff_estimate_colname = "estimate" 
+piecewise_log_Est_colname = "piecewise_log_estimate"
+Coef_of_Var_colname = "CoV" #Specificallly, the coefficient of variation of the RedDiv estimates
+CoV_threshold = 0.2 #This determines where the line is drawn on plots with the RedDiv CoV as an axis.
+Sig_Div_colname = "Sig_Div" #The boolean column indicating whether the paralogs have significantly diverse effects on that gene
+Sig_Epi_colname = "Sig_Epi" #The boolean column indicating whether the paralogs have significantly epistatic effects on that gene
+
+# Setting the title of the scatterpie plot legends
+pieslice_legend_title = "Transcriptional \nNiche" #The label indicating the meaning of the scatterpie plots' pie chart colors
+
+# Initializing the list that will eventually hold all the plots from here on out.
+global_plt_lst = list()
+
+
+
+####################################################################################################
+#								PACKAGE IMPORTS
+####################################################################################################
+
+library(openxlsx) #Required to make the formatted .xlsx files containing the GO results
+library(edgeR) #Loads goana() GO function
+library(systemPipeR) #Required for transcriptional niche Venn diagrams
+
+library(scatterpie) #Required for the scatterpie plots in the Redundant/Diverse (RedDiv) and Additive/Epistatic (AddEpi) analyses.
+library(scales) #Required to enable the scatterpie plots have reasonable aspect ratios
+library(patchwork) #Required for arranging ggplots into a multi-panel figure
+library(cowplot) #Required for arranging ggplots into a multi-panel figure
+library(grid) #Required for printing just the legends that are extracted by cowplot::get_legend()
+
+
+####################################################################################################
+#								FUNCTION DEFINITIONS
+####################################################################################################
+
+# Function to create an individual gene dataset, export it, and return it.
+individual_gene_dataset_fn = function(FlyBase_ID, norm_counts_mat, row_info_df, col_info_df){
+	norm_counts_row_df = as.matrix(norm_counts_mat[row_info_df[["FlyBase_ID"]]==FlyBase_ID,])
+	colnames(norm_counts_row_df) = "norm_counts"
+	temp_df = cbind(rep(FlyBase_ID, nrow(col_info_df)), rownames(col_info_df), col_info_df, norm_counts_row_df)
+	colnames(temp_df)[1:2] = c("FlyBase_ID", "BAM_filename")
+	write.csv(temp_df, file=paste(FlyBase_ID, "_norm_counts_stacked.csv", sep=""), row.names=FALSE)
+	return(temp_df)
+}
+
+# Function to create a folder if it doesn't exist
+create_folder_fn = function(folder){
+	ifelse(!dir.exists(file.path(getwd(),folder)), dir.create(file.path(getwd(),folder)), FALSE)
+}
+
+# Function to unstack and merge the SAS results
+unstack_merge_fn = function(main_df, stacked_df, stacked_cols, merge_by_col, subset_col, subset_val){
+	temp_df = stacked_df[,c(merge_by_col, subset_col, stacked_cols)]
+	temp_df = temp_df[temp_df[[subset_col]]==subset_val,]
+	temp_df = merge(main_df, temp_df, by=merge_by_col, all.x=TRUE, sort=FALSE)
+	temp_df[[subset_col]] = NULL
+	for (column in stacked_cols){
+		colnames(temp_df)[which(colnames(temp_df)==column)] = paste(subset_val, column, sep=".")
+	}
+	return(temp_df)
+}
+
+# Returns a named list of transcriptional niche dataframes, with each dataframe named according to its experimental LSMEst
+Tniche_generator_fn = function(
+Tniche_LSMEst_name_vec, 
+diff_expression_df, 
+row_info_df, 
+Dir="Directionless", #"Up", "Down", or "Directionless" (Both Up and Down together)
+ctrl_Tniche_LSMEst_name=NA, 
+alpha=0.05, 
+FDR_colname="FDR"){
+	Tniche_df_lst = list()
+	ctrl_sig_vec = TRUE
+	ctrl_dir_vec = TRUE
+	LSMEst_dir_vec = TRUE
+	Tniche_df = row_info_df
+	if(!is.na(ctrl_Tniche_LSMEst_name)){
+		ctrl_FDR_colname = paste(ctrl_Tniche_LSMEst_name, FDR_colname, sep=".")
+		ctrl_FDR_col = diff_expression_df[ctrl_FDR_colname]
+		ctrl_sig_vec = ctrl_FDR_col < alpha
+		ctrl_FC_colname = paste(ctrl_Tniche_LSMEst_name, "FC", sep=".")
+		ctrl_FC_col = diff_expression_df[ctrl_FC_colname]
+		Tniche_df = cbind(Tniche_df, ctrl_FDR_col, ctrl_FC_col)
+		if (Dir=="Up"){
+			ctrl_dir_vec = ctrl_FC_col > 1
+		}
+		if (Dir=="Down"){
+			ctrl_dir_vec = ctrl_FC_col < 1
+		}
+	}
+	for (LSMEst in Tniche_LSMEst_name_vec){
+		LSMEst_FDR_colname = paste(LSMEst, FDR_colname, sep=".")
+		LSMEst_FDR_col = diff_expression_df[LSMEst_FDR_colname]
+		LSMEst_sig_vec = LSMEst_FDR_col < alpha
+		LSMEst_FC_colname = paste(LSMEst, "FC", sep=".")
+		LSMEst_FC_col = diff_expression_df[LSMEst_FC_colname]
+		LSMEst_Tniche_df = cbind(Tniche_df, LSMEst_FDR_col, LSMEst_FC_col)
+		if (Dir=="Up"){
+			LSMEst_dir_vec = LSMEst_FC_col > 1
+		}
+		if (Dir=="Down"){
+			LSMEst_dir_vec = LSMEst_FC_col < 1
+		}
+		keep_vec = LSMEst_sig_vec & LSMEst_dir_vec & ctrl_sig_vec & ctrl_dir_vec 
+		paralog = strsplit(LSMEst, "[. -]+")[[1]][2] # This assumes that the LSMEst format is "[Sex].[paralog] - [Sex].[control]"
+		Tniche_df_lst[[paralog]] = LSMEst_Tniche_df[keep_vec,]
+	}
+	return(Tniche_df_lst)
+}
+
+# Function used to generate a scatterplot in which each of the points is
+# a pie chart. Requires the scatterpie package, which is built on ggplot2.
+scatterpie_plot_fn = function(
+	dataframe, 
+	x_colname, 
+	y_colname,
+	pieslice_colname_vec,
+	pieslice_label_vec,
+	pieslice_color_lst,
+	pieslice_legend_title="pieslice_legend_title",
+	pie_scale=1,
+	main="main",
+	subtitle="subtitle",
+	xlab="xlab",
+	ylab="ylab",
+	y_to_x_axis_ratio=1,
+	hline = NA, #Can be a number or (if the Y axis is -log10(p)) the name of a boolean significance column. NA draws no line.
+	vline = NA, #Can be a number or (if the X axis is -log10(p)) the name of a boolean significance column. NA draws no line.
+	hline_name = "hline_name", #If hline_name==vline_name, then only a single legend with both lines will be produced.
+	vline_name = "vline_name", #If hline_name==vline_name, then only a single legend with both lines will be produced.
+	hline_linetype = 1,
+	vline_linetype = 1,
+	line_width =0.25,
+	hline_color="#ED1C24", #was "red"
+	vline_color="#ED1C24", #was "red"
+	x_log10piecewise = FALSE,
+	y_log10piecewise = FALSE,
+	x_limits = c(NA, NA),
+	y_limits = c(NA, NA),
+	pie_keyheight = 1, #Determines height of the colored squares in the pieslice legend (was 0.25)
+	pie_keywidth = 1 #Determines width of the colored squares in the pieslice legend (was 0.5)
+	){
+	
+	x_min = x_limits[1]
+	x_max = x_limits[2]
+	y_min = y_limits[1]
+	y_max = y_limits[2]
+	
+	if (is.na(x_min)){
+		x_min = min(dataframe[[x_colname]])
+	}
+	if (is.na(x_max)){
+		x_max = max(dataframe[[x_colname]])
+	}
+	if (is.na(y_min)){
+		y_min = min(dataframe[[y_colname]])
+	}
+	if (is.na(y_max)){
+		y_max = max(dataframe[[y_colname]])
+	}
+	
+	x_rnge = x_max - x_min
+	y_rnge = y_max - y_min
+	
+	y_transform_fn = function(y){
+		return(y/(y_rnge/x_rnge)*y_to_x_axis_ratio)
+	}
+	
+	y_inv_transform_fn = function(y){
+		return(y*(y_rnge/x_rnge)/y_to_x_axis_ratio)
+	}
+	
+	y_trans = trans_new(
+		name="y_trans", 
+		transform=y_transform_fn,
+		inverse=y_inv_transform_fn,
+		breaks=function(y){labeling::extended(range(y)[1], range(y)[2], 5)}
+	)
+	
+	plt = ggplot() + geom_scatterpie(
+		aes_string(x=x_colname, y=y_colname),
+		data=dataframe, 
+		cols=pieslice_colname_vec, 
+		color=NA, 
+		pie_scale=pie_scale
+	) +
+	coord_fixed() +
+	scale_fill_manual(
+		breaks = pieslice_colname_vec, 
+		labels = pieslice_label_vec, 
+		values=pieslice_color_lst, 
+		name=pieslice_legend_title,
+		guide=guide_legend(keyheight=pie_keyheight, keywidth = pie_keywidth, order=1)
+	) +	
+	theme_bw() +
+	theme(
+		panel.grid.major = element_blank(), 
+		panel.grid.minor = element_blank(),
+		plot.title = element_text(size = 9),
+		plot.subtitle = element_text(size = 7),
+		axis.text.x = element_text(color = "black"),
+		axis.text.y = element_text(color = "black"),
+		legend.title = element_text(size = 8),
+		legend.text = element_text(size = 8),
+		legend.justification = c("right", "top"),
+		legend.box.margin = margin(0,0,0,.15),
+		legend.box.spacing = unit(0, "lines"),
+		legend.background = element_rect(fill=NA)
+	) + 
+	theme(
+		legend.background=element_blank(),
+		legend.box.background=element_blank(),
+		legend.key=element_blank(),
+		panel.background=element_blank(),
+		plot.background=element_blank(),
+		strip.background=element_blank()
+	) +
+	labs(title=main, subtitle=subtitle) + 
+	xlab(xlab) + 
+	ylab(ylab)
+	
+	if (x_log10piecewise){
+		major_breaks = major_breaks_fn(dataframe[[x_colname]])
+		major_breaks_labels = as.character(log10_piecewise_inv_fn(major_breaks))
+		plt = plt + scale_x_continuous(
+			breaks = major_breaks,
+			labels = major_breaks_labels,
+			limits = x_limits
+		) +
+		theme(axis.text.x = element_text(size = 8))
+	} else {
+		plt = plt + scale_x_continuous(limits = x_limits)
+	}
+	if (y_log10piecewise){
+		major_breaks = major_breaks_fn(dataframe[[y_colname]])
+		major_breaks_labels = as.character(log10_piecewise_inv_fn(major_breaks))
+		plt = plt + scale_y_continuous(
+			breaks = major_breaks,
+			labels = major_breaks_labels,
+			limits = y_limits,
+			trans = y_trans
+		) +
+		theme(axis.text.y = element_text(size = 8))
+	} else {
+		plt = plt + scale_y_continuous(trans = y_trans, limits = y_limits)
+	}
+	if (!is.na(hline)){
+		if (is.numeric(hline)){
+			hline_height = hline
+		}
+		if (is.character(hline)){
+			hline_height = FDR_line_height_fn(dataframe[[y_colname]], dataframe[[hline]])
+		}
+	}
+	if (!is.na(vline)){
+		if (is.numeric(vline)){
+			vline_height = vline
+		}
+		if (is.character(vline)){
+			vline_height = FDR_line_height_fn(dataframe[[x_colname]], dataframe[[vline]])
+		}
+	}
+	if (hline_name == vline_name){
+		plt = plt + 
+		geom_hline(aes(yintercept=hline_height, linetype = ""), color=hline_color, size=line_width) + 
+		geom_vline(aes(xintercept=vline_height, linetype = ""), color=vline_color, size=line_width) + 
+		scale_linetype_manual(name = hline_name, values = hline_linetype)
+	} else {
+		if (!is.na(hline)){
+			plt = plt + geom_hline(aes(yintercept=hline_height,	linetype = ""), color=hline_color, size=line_width) + 
+			scale_linetype_manual(name = hline_name, values = hline_linetype)
+		}
+		if (!is.na(vline)){
+			plt = plt + geom_vline(aes(xintercept=vline_height,	color = ""), linetype = vline_linetype, size=line_width) + 
+			scale_color_manual(name = vline_name, values=vline_color)
+		}
+	}
+	return(plt)
+}
+
+# Function used to generate a 2D density plot.
+density_plot_fn = function(
+	dataframe, 
+	x_colname, 
+	y_colname,
+	main="main",
+	subtitle="subtitle",
+	xlab="xlab",
+	ylab="ylab",
+	y_to_x_axis_ratio=1,
+	hline = NA, #Can be a number or (if the Y axis is -log10(p)) the name of a boolean significance column. NA draws no line.
+	vline = NA, #Can be a number or (if the X axis is -log10(p)) the name of a boolean significance column. NA draws no line.
+	line_name = "line_name",
+	linetype = 1,
+	line_color="#ED1C24", #was "red"
+	line_width=0.25,
+	x_log10piecewise = FALSE,
+	y_log10piecewise = FALSE,
+	x_limits = c(NA, NA),
+	y_limits = c(NA, NA)
+	){
+	
+	x_min = x_limits[1]
+	x_max = x_limits[2]
+	y_min = y_limits[1]
+	y_max = y_limits[2]
+	
+	if (is.na(x_min)){
+		x_min = min(dataframe[[x_colname]])
+	}
+	if (is.na(x_max)){
+		x_max = max(dataframe[[x_colname]])
+	}
+	if (is.na(y_min)){
+		y_min = min(dataframe[[y_colname]])
+	}
+	if (is.na(y_max)){
+		y_max = max(dataframe[[y_colname]])
+	}
+	
+	x_rnge = x_max - x_min
+	y_rnge = y_max - y_min
+	
+	y_transform_fn = function(y){
+		return(y/(y_rnge/x_rnge)*y_to_x_axis_ratio)
+	}
+	
+	y_inv_transform_fn = function(y){
+		return(y*(y_rnge/x_rnge)/y_to_x_axis_ratio)
+	}
+	
+	y_trans = trans_new(
+		name="y_trans", 
+		transform=y_transform_fn,
+		inverse=y_inv_transform_fn,
+		breaks=function(y){labeling::extended(range(y)[1], range(y)[2], 5)}
+	)
+	
+	plt = ggplot(dataframe, aes_string(x=x_colname, y=y_colname)) +
+		stat_density_2d(aes(fill = ..level..), geom = "polygon", bins=30, alpha=.3, adjust = 0.5, n=400) +
+		scale_fill_distiller(
+			palette="Spectral", 
+			direction=-1, 
+			guide=guide_colourbar(
+				title="Density", order=1, barwidth = 1, barheight = 5, ticks=FALSE, label.vjust=1.5
+			)
+		) +
+		theme_bw() +
+		theme(
+			panel.grid.major = element_blank(), 
+			panel.grid.minor = element_blank(),
+			plot.title = element_text(size = 9),
+			plot.subtitle = element_text(size = 7),
+			axis.text.x = element_text(color = "black"),
+			axis.text.y = element_text(color = "black"),
+			legend.title = element_text(size = 8),
+			legend.text = element_text(size = 6),
+			legend.justification = c("right", "top"),
+			legend.box.margin = margin(0,0,0,.15),
+			legend.box.spacing = unit(0, "lines"),
+			legend.background = element_rect(fill=NA)
+		) +
+		theme(
+			legend.background=element_blank(),
+			legend.box.background=element_blank(),
+			legend.key=element_blank(),
+			panel.background=element_blank(),
+			plot.background=element_blank(),
+			strip.background=element_blank()
+		) +
+		coord_fixed() +
+		labs(title=main, subtitle=subtitle) + 
+		xlab(xlab) + 
+		ylab(ylab)
+	
+	if (x_log10piecewise){
+		major_breaks = major_breaks_fn(dataframe[[x_colname]])
+		major_breaks_labels = as.character(log10_piecewise_inv_fn(major_breaks))
+		plt = plt + scale_x_continuous(
+			breaks = major_breaks,
+			labels = major_breaks_labels,
+			limits = x_limits
+		) +
+		theme(axis.text.x = element_text(size = 8))
+	} else {
+		plt = plt + scale_x_continuous(limits = x_limits)
+	}
+	if (y_log10piecewise){
+		major_breaks = major_breaks_fn(dataframe[[y_colname]])
+		major_breaks_labels = as.character(log10_piecewise_inv_fn(major_breaks))
+		plt = plt + scale_y_continuous(
+			breaks = major_breaks,
+			labels = major_breaks_labels,
+			limits = y_limits,
+			trans = y_trans
+		) +
+		theme(axis.text.y = element_text(size = 8))
+	} else {
+		plt = plt + scale_y_continuous(trans = y_trans, limits = y_limits)
+	}
+	if (!is.na(hline)){
+		if (is.numeric(hline)){
+			hline_height = hline
+		}
+		if (is.character(hline)){
+			hline_height = FDR_line_height_fn(dataframe[[y_colname]], dataframe[[hline]])
+		}
+		plt = plt + geom_hline(aes(yintercept=hline_height, linetype = ""), color=line_color, size=line_width)
+	}
+	if (!is.na(vline)){
+		if (is.numeric(vline)){
+			vline_height = vline
+		}
+		if (is.character(vline)){
+			vline_height = FDR_line_height_fn(dataframe[[x_colname]], dataframe[[vline]])
+		}
+		plt = plt + geom_vline(aes(xintercept=vline_height, linetype = ""), color=line_color, size=line_width)
+	}
+	
+	if (!is.na(hline) | !is.na(vline)){
+		plt = plt + scale_linetype_manual(name = line_name, values = linetype)
+	}
+	return(plt)
+}
+
+# Function to perform a log10 tranformation on both positive and negative values.
+# Used for visualization only.
+log10_piecewise_fn = function(x){
+	return(sign(x)*log(abs(x) + 1, 10))
+}
+
+# The inverse function of log10_piecewise_fn().
+# Used for visualization only.
+log10_piecewise_inv_fn = function(x){
+	return(sign(x)*(10^(abs(x))-1))
+}
+
+# This function takes a numeric vector of data transformed by log10_piecewise_fn() and
+# produces major breaks (i.e. tick marks) in that TRANSFORMED space that correspond to
+# the orders of magnitude that the data span in the RAW data space.
+major_breaks_fn =function(x){
+	inv_x = log10_piecewise_inv_fn(x)
+	min_power = floor(log(abs(min(inv_x)), 10))
+	max_power = floor(log(abs(max(inv_x)), 10))
+	power_vec = seq(min_power*sign(min(inv_x)), max_power*sign(max(inv_x)))
+	major_breaks = log10_piecewise_fn(10^abs(power_vec)*sign(power_vec))
+	return(major_breaks)
+}
+
+# Function to determine the height of a significance cutoff line on a plot.
+# Increment is only used when the boolean sig_vec is either all FALSE or all
+# TRUE, and is the percent of the range of neg_log10_pval_vec that will be
+# added or subtracted to the max or min of neg_log10_pval_vec, respectively.
+FDR_line_height_fn = function(neg_log10_pval_vec, sig_vec, increment=0.05){
+	increment = increment*(max(neg_log10_pval_vec) - min(neg_log10_pval_vec))
+	if (sum(sig_vec) == 0){
+		FDR_line_height = max(neg_log10_pval_vec) + increment
+		return(FDR_line_height)
+	}
+	
+	if (sum(sig_vec) == length(sig_vec)){
+		FDR_line_height = min(neg_log10_pval_vec) - increment
+		return(FDR_line_height)
+	}
+	
+	temp_df = as.data.frame(cbind(neg_log10_pval_vec, sig_vec))
+	colnames(temp_df) = c("neg_log10_pval_vec", "sig_vec")
+	temp_df = temp_df[order(-neg_log10_pval_vec),]
+	
+	first_nonsig_pval = temp_df[["neg_log10_pval_vec"]][match(FALSE, temp_df[["sig_vec"]])]
+	last_sig_pval = temp_df[["neg_log10_pval_vec"]][match(FALSE, temp_df[["sig_vec"]])-1]
+	FDR_line_height = (first_nonsig_pval - last_sig_pval)/2 + last_sig_pval
+	return(FDR_line_height)
+}
+
+# Function to produce a plot from vectors.
+ggsig_plot = function(
+	dataframe, 
+	x_colname, 
+	y_colname,
+	sig_vec,
+	col_axis="x", 
+	col_thresh=0,
+	# col_lst = list("Sig Down"="blue", "Non Sig"="black", "Sig Up"="red"),
+	col_lst = list("Sig Down"="#005BAA", "Non Sig"="#000000", "Sig Up"="#ED1C24"),
+	main="Main",
+	subtitle=NA,
+	xlab="xlab",
+	ylab="ylab"
+	){
+	
+	old_x_colname = x_colname
+	old_y_colname = y_colname
+	x_colname = gsub("[[:punct:]]", "", gsub("[[:space:]]", "", old_x_colname))
+	y_colname = gsub("[[:punct:]]", "", gsub("[[:space:]]", "", old_y_colname))
+	dataframe = dataframe[,c(old_x_colname, old_y_colname)]
+	names(dataframe)[names(dataframe) == old_x_colname] = x_colname
+	names(dataframe)[names(dataframe) == old_y_colname] = y_colname
+	
+	if (col_axis=="y") {col_colname = y_colname}
+	if (col_axis=="x") {col_colname = x_colname}
+	
+	group_colname = "group"
+	dataframe[[group_colname]] = names(col_lst)[2]
+	
+	dn_vec = dataframe[[col_colname]] < col_thresh
+	sig_dn_vec = sig_vec & dn_vec
+	dataframe[[group_colname]][sig_dn_vec] = names(col_lst)[1]
+	
+	up_vec = dataframe[[col_colname]] > col_thresh
+	sig_up_vec = sig_vec & up_vec
+	dataframe[[group_colname]][sig_up_vec] = names(col_lst)[3]
+	
+	dataframe[[group_colname]] = as.factor(dataframe[[group_colname]])
+	
+	if (sum(sig_vec) > 0){
+		percent_sig_up = 100*sum(sig_up_vec)/sum(sig_vec)
+	} else {
+		percent_sig_up = 0
+	}
+	
+	if (is.na(subtitle)){
+		subtitle = sprintf(
+			"%s/%s significant | %s/%s (%.0f%%) up",
+			sum(sig_vec),length(sig_vec),
+			sum(sig_up_vec), sum(sig_vec), round(percent_sig_up)
+		)
+	}
+	
+	plt = ggplot() + geom_point(
+		aes_string(x=x_colname, y=y_colname, color=group_colname),
+		data=dataframe, stroke=0, size=1
+	) +
+	scale_color_manual(
+		name = "", 
+		values=col_lst
+	) +
+	theme_bw() +
+	theme(
+		panel.grid.major = element_blank(), 
+		panel.grid.minor = element_blank(),
+		plot.title = element_text(size = 9, hjust=0.5),
+		plot.subtitle = element_text(size = 7, hjust=0.5),
+		axis.text.x = element_text(color = "black"),
+		axis.text.y = element_text(color = "black"),
+		legend.title = element_text(size = 8),
+		legend.text = element_text(size = 8),
+		legend.justification = c("right", "top"),
+		legend.box.margin = margin(0,0,0,.15),
+		legend.box.spacing = unit(0, "lines"),
+		legend.background = element_rect(fill=NA)
+	) +
+	theme(
+		legend.background=element_blank(),
+		legend.box.background=element_blank(),
+		legend.key=element_blank(),
+		panel.background=element_blank(),
+		plot.background=element_blank(),
+		strip.background=element_blank()
+	) +
+	labs(title=main, subtitle=subtitle) + 
+	xlab(xlab) + 
+	ylab(ylab)
+	
+	return(plt)
+}
+
+
+
+####################################################################################################
+#									DATA IMPORTS
+####################################################################################################
+
+# Setting the working directory relative to this file's location
+file_location = dirname(parent.frame(2)$ofile) #gets filepath of this script if sourced in RStudio
+setwd(file_location) #This working directory is temporary to create the "Post_SAS_results" folder.
+create_folder_fn("Post_SAS_results")
+setwd("Post_SAS_results") #This "Post_SAS_results" folder is the working directory for the remainder of the script.
+
+# Loading norm_counts_mat, row_info_df, and col_info_df, which were saved by Pre_SAS.R
+load(paste(file_location, "Pre_SAS_results", "Post_SAS_input", "Norm_count_info.RData",sep="/"))
+
+View(norm_counts_mat)
+View(row_info_df)
+View(col_info_df)
+View(sex_vec)
+View(outlier_sample_vec)
+
+# Importing the Tests3, LSMeans, and LSMEstimates tables output by proc MIXED to be
+# used in the generation of anova_results_df, estimate_df, and diff_expression_df, respectively
+Tests3 = read.table(paste(file_location, "SAS_results", "Main_results", "Tests3.csv", sep="/"), header=TRUE, sep=",")
+
+LSMeans = read.table(paste(file_location, "SAS_results", "Main_results", "LSMeans.csv", sep="/"), header=TRUE, sep=",")
+LSMEstimates = read.table(paste(file_location, "SAS_results", "Main_results", "LSMEstimates.csv", sep="/"), header=TRUE, sep=",")
+
+View(Tests3)
+View(LSMeans)
+View(LSMEstimates)
+
+
+####################################################################################################
+#									INITIAL PROCESSING
+####################################################################################################
+
+################################### DEFINING expression_df #########################################
+# expression_df contains measurements of gene expression
+
+# Defining DGEList_obj for expression calculations
+DGEList_obj = DGEList(norm_counts_mat, genes=row_info_df, samples=col_info_df)
+
+# Appending various measures of expression to expression_df
+expression_df = row_info_df
+expression_df$median_norm_count = apply(norm_counts_mat, 1, median)
+expression_df$median_CPM = apply(cpm(DGEList_obj), 1, median)
+expression_df$median_RPKM = apply(rpkm(DGEList_obj), 1, median)
+expression_df$avg_norm_count = rowMeans(norm_counts_mat)
+expression_df$avg_CPM = rowMeans(cpm(DGEList_obj))
+expression_df$avg_RPKM = rowMeans(rpkm(DGEList_obj))
+expression_df$avg_log_norm_count = log(rowMeans(norm_counts_mat + prior_count), 2)
+expression_df$avg_log_CPM = log(rowMeans(cpm(DGEList_obj) + prior_count), 2) #***
+expression_df$avg_log_RPKM = log(rowMeans(rpkm(DGEList_obj) + prior_count), 2)
+# *** The documentation for edgeR::cpm() says log2(rowMeans(cpm(x)) and aveLogCPM(x) will give "slightly different" results, 
+# and because I want to be consistent with other calculations (e.g. avg_log_RPKM and median_CPM), I went with this method.
+
+View(expression_df)
+
+
+
+################################### DEFINING anova_results_df ################################################
+# anova_results_df holds raw and FDR-corrected p-values of the full model anova's fixed effects
+
+# Initially defining anova_results_df as row_info_df to maintain all gene information in the same order
+anova_results_df = row_info_df
+
+for (FE in fixed_effects_vec){
+	# Unstacking the p-value columns from Tests3 and merging them with the initial anova_results_df by FlyBase_ID
+	anova_results_df = unstack_merge_fn(anova_results_df, Tests3, "ProbF", "FlyBase_ID", "Effect", FE)
+	
+	# Converting the p-value columns of anova_results_df from factors to numeric columns
+	anova_results_df[,length(anova_results_df)] = as.numeric(as.character(anova_results_df[,length(anova_results_df)]))
+	
+	# Appending an FDR column for each fixed effect (FDR calculated within each fixed effect)
+	ProbF_colname = paste(FE, "ProbF", sep=".")
+	FE_FDR_colname = paste(FE, FDR_colname, sep=".")
+	anova_results_df[[FE_FDR_colname]] = p.adjust(anova_results_df[[ProbF_colname]], method="fdr")
+}
+
+View(anova_results_df)
+
+
+
+################################### DEFINING estimate_df ################################################
+# estimate_df holds Least Squares Means Estimates of each Genotype by Sex
+
+# fixed_effects_combo_vec contains the names of the variables used in any fixed effect term. For instance,
+# if fixed_effects_vec==c("Sex", "Genotype", "Sex*Genotype"), then fixed_effects_combo_vec==c("Sex", "Genotype").
+# fixed_effects_combo_vec is used to access the appropriate columns in LSMeans.
+fixed_effects_combo_vec = c()
+for (FE in fixed_effects_vec){
+	fixed_effects_combo_vec = union(fixed_effects_combo_vec, strsplit(FE, "[*]")[[1]])
+}
+
+# Adding a fixed_effects_combo column to LSMeans which contains each row's Sex and Genotype in the format
+# "[Sex].[Genotype]", even if only analyzing a single sex. This facilitates unstacking.
+if (length(sex_vec) < 2){
+	LSMeans[["fixed_effects_combo"]] = apply(LSMeans[fixed_effects_combo_vec], 1, function(x){
+		paste(sex_vec, paste(x, collapse='.'), sep=".")
+	})
+} else {
+	LSMeans[["fixed_effects_combo"]] = apply(LSMeans[fixed_effects_combo_vec], 1, function(x){paste(x, collapse='.')})
+}
+
+# Initially defining estimate_df as row_info_df to maintain all gene information in the same order
+estimate_df = row_info_df
+
+for (FE in unique(LSMeans[["fixed_effects_combo"]])){
+	# Unstacking the Estimate columns from LSMeans and merging them with the initial estimate_df by FlyBase_ID
+	estimate_df = unstack_merge_fn(estimate_df, LSMeans, "Estimate", "FlyBase_ID", "fixed_effects_combo", FE)
+	
+	# Converting the Estimate columns of estimate_df from factors to numeric columns
+	estimate_df[,length(estimate_df)] = as.numeric(as.character(estimate_df[,length(estimate_df)]))
+}
+
+View(estimate_df)
+
+
+
+################################### DEFINING diff_expression_df #########################################
+# diff_expression_df holds measurements of differential gene expression
+
+# Defining LSMEst_vec, which holds the labels of all the LSMEsts
+LSMEst_vec = c()
+for (sex in sex_vec){
+	LSMEst_vec = c(LSMEst_vec, LSMEst_vec_lst[[sex]])
+}
+
+# Initially defining diff_expression_df as row_info_df to maintain all gene information in the same order
+diff_expression_df = row_info_df
+
+for (LSMEst in LSMEst_vec){
+	# Unstacking the p-value columns from LSMEstimates and merging them with the initial estimate_df by FlyBase_ID
+	diff_expression_df = unstack_merge_fn(diff_expression_df, LSMEstimates, "Probt", "FlyBase_ID", "Label", LSMEst)
+	
+	# Appending FDR columns
+	Probt_colname = paste(LSMEst, "Probt", sep=".")
+	LSMEst_FDR_colname = paste(LSMEst, FDR_colname, sep=".")
+	diff_expression_df[[LSMEst_FDR_colname]] = p.adjust(diff_expression_df[[Probt_colname]], method="fdr")
+	
+	# Converting the p-value columns of diff_expression_df from factors to numeric columns
+	diff_expression_df[,length(diff_expression_df)] = as.numeric(as.character(diff_expression_df[,length(diff_expression_df)]))
+	
+	# Appending Estimate columns
+	Genotype_1 = strsplit(LSMEst, " - ")[[1]][1]
+	Genotype_2 = strsplit(LSMEst, " - ")[[1]][2]
+	Genotype_1_estimate_vec = estimate_df[[paste(Genotype_1,"Estimate",sep=".")]]
+	Genotype_2_estimate_vec = estimate_df[[paste(Genotype_2,"Estimate",sep=".")]]
+	diff_estimate_vec = Genotype_1_estimate_vec - Genotype_2_estimate_vec
+	diff_expression_df[[paste(LSMEst, "Estimate", sep=".")]] = diff_estimate_vec
+	
+	# Appending Fold Change columns
+	Genotype_1_estimate_vec = Genotype_1_estimate_vec + prior_count
+	Genotype_2_estimate_vec = Genotype_2_estimate_vec + prior_count
+	fold_change_vec = Genotype_1_estimate_vec/Genotype_2_estimate_vec
+	diff_expression_df[[paste(LSMEst, "FC", sep=".")]] = fold_change_vec
+	
+	# Appending Log Fold Change columns
+	log_fold_change_vec = log(fold_change_vec + prior_count, 2)
+	diff_expression_df[[paste(LSMEst, "logFC", sep=".")]] = log_fold_change_vec
+}
+
+View(diff_expression_df)
+
+
+
+####################################################################################################
+#										MD & VOLCANO PLOTS
+####################################################################################################
+
+if (RNAseq_plots){
+	
+	# Generating and saving the full model anova MD plots (-log(p-value) vs Avg log2(norm count))
+	anova_MD_plot_folder = "Full Model ANOVA MD Plots"
+	create_folder_fn(anova_MD_plot_folder)
+	for (fixed_effect in fixed_effects_vec){
+		
+		sig_vec = anova_results_df[[paste(fixed_effect, FDR_colname, sep=".")]] < alpha
+		x_colname = "avg_log_norm_count"
+		y_colname = paste(fixed_effect, "ProbF", sep=".")
+		temp_df = expression_df[x_colname]
+		temp_df[[y_colname]] = -log(anova_results_df[[y_colname]], 10)
+		
+		main = sprintf("%s Full Model Anova", fixed_effect)
+		xlab = bquote('Avg log'[2]*'(GeTMM-normalized Count + '~.(prior_count)*')')
+		ylab = expression('-log'[10]*'('*italic(p)*')')
+		
+		plt = ggsig_plot(
+			dataframe = temp_df,
+			x_colname = x_colname,
+			y_colname = y_colname,
+			sig_vec = sig_vec,
+			col_axis="x",
+			col_thresh=-Inf,
+			col_lst = list("Sig Down"="#005BAA", "Non Sig"="#000000", "Sig Up"="#ED1C24"),
+			main=main,
+			subtitle=NA,
+			xlab=xlab,
+			ylab=ylab
+		)
+		
+		fixed_effect_clean = gsub("[[:punct:]]", "_", fixed_effect)
+		plot_filename = sprintf("%s/%s.png", anova_MD_plot_folder, fixed_effect_clean)
+		png(plot_filename, width=3.25, height=3.25, units = "in", res=400)
+		print(plt)
+		dev.off()
+		
+		plt_name = paste(fixed_effect_clean, "MD", sep="_")
+		global_plt_lst[[plt_name]] = plt
+	}
+	
+	# Generating and saving the LS Mean Estimate Volcano plots (-log(p-value) vs log fold change)
+	LSMEst_volc_plot_folder = "LSMEst Volcano Plots"
+	create_folder_fn(LSMEst_volc_plot_folder)
+	for (LSMEst in LSMEst_vec){
+		sig_vec = diff_expression_df[[paste(LSMEst, FDR_colname, sep=".")]] < alpha
+		x_colname = paste(LSMEst, "logFC", sep=".")
+		y_colname = paste(LSMEst, "Probt", sep=".")
+		temp_df = diff_expression_df[,c(x_colname, y_colname)]
+		temp_df[y_colname] = -log(temp_df[y_colname], 10)
+		
+		main = LSMEst
+		xlab = expression('log'[2]*'(Fold Change)')
+		ylab = expression('-log'[10]*'('*italic(p)*')')
+		
+		plt = ggsig_plot(
+			dataframe = temp_df,
+			x_colname = x_colname,
+			y_colname = y_colname,
+			sig_vec = sig_vec,
+			col_axis="x",
+			col_thresh=0,
+			col_lst = list("Sig Down"="#005BAA", "Non Sig"="#000000", "Sig Up"="#ED1C24"),
+			main=main,
+			subtitle=NA,
+			xlab=xlab,
+			ylab=ylab
+		)
+		
+		volc_plot_filename = sprintf("%s/%s_volc_plot.png", LSMEst_volc_plot_folder, LSMEst) 
+		png(volc_plot_filename, height=3.25, width=3.25, units="in", res=400)
+		print(plt)
+		dev.off()
+		
+		plt_name = paste(LSMEst, "Volc", sep="_")
+		global_plt_lst[[plt_name]] = plt
+	}
+}
+
+
+
+####################################################################################################
+#					DEFINING TRANSCRIPTIONAL NICHES AND CREATING VENN DIAGRAMS
+####################################################################################################
+
+# 1) Generating the gene lists that define each transcriptional network (Tniche) and storing them in a multi-leveled named list
+# 2) Generating and exporting Venn Diagrams
+# 3) Generating and exporting GO analysis results
+if (generate_transcriptional_niches){
+	Master_Tniche_lst = list()
+	create_folder_fn("Transcriptional_niches")
+	for (Sex in sex_vec){
+		Sex_folder = paste("Transcriptional_niches", Sex, sep="/")
+		create_folder_fn(Sex_folder)
+		if(Sex=="Female"){
+		Tniche_LSMEst_name_vec = F_Tniche_LSMEst_name_vec
+		ctrl_Tniche_LSMEst_name = F_ctrl_Tniche_LSMEst_name
+		}
+		if(Sex=="Male"){
+		Tniche_LSMEst_name_vec = M_Tniche_LSMEst_name_vec
+		ctrl_Tniche_LSMEst_name = M_ctrl_Tniche_LSMEst_name
+		}
+		for (Dir in c("Up", "Down", "Directionless")){
+			Dir_folder = paste(Sex_folder, Dir, sep="/")
+			create_folder_fn(Dir_folder)
+				Full_Tniche_LSMEst_name_vec = c(Tniche_LSMEst_name_vec, ctrl_Tniche_LSMEst_name)
+				TNdfL = Tniche_generator_fn(
+				Full_Tniche_LSMEst_name_vec, 
+				diff_expression_df, 
+				row_info_df, 
+				Dir=Dir, 
+				ctrl_Tniche_LSMEst_name=NA)
+			
+			# Append to Master_Tniche_lst
+			Master_Tniche_lst[[Sex]][[Dir]] = TNdfL
+			
+			# Write each transcriptional niche dataframe to a .csv
+			for (genotype in names(TNdfL)){
+				write.csv(TNdfL[[genotype]], sprintf("%s/%s_%s_%s_Tniche.csv", Dir_folder, Sex, Dir, genotype), row.names=FALSE)
+			}
+		}
+		# Generate and export Venn Diagrams
+		if (venn_diagrams){
+			up_TNdfL = Master_Tniche_lst[[Sex]][["Up"]]
+			up_lst = list()
+			up_empty = TRUE
+			for (paralog in names(up_TNdfL)){
+				up_lst[[paralog]] = up_TNdfL[[paralog]][["FlyBase_ID"]]
+				if (length(up_lst[[paralog]]) > 1) {up_empty=FALSE}
+			}
+			
+			dn_TNdfL = Master_Tniche_lst[[Sex]][["Down"]]
+			dn_lst = list()
+			dn_empty = TRUE
+			for (paralog in names(dn_TNdfL)){
+				dn_lst[[paralog]] = dn_TNdfL[[paralog]][["FlyBase_ID"]]
+				if (length(dn_lst[[paralog]]) > 1) {dn_empty=FALSE}
+			}
+			
+			if (!up_empty & !dn_empty){
+				vennsetup = overLapper(up_lst, type="vennsets")
+				vennsetdown = overLapper(dn_lst, type="vennsets")
+				if (length(TNdfL) < 5){
+					venn_filename = sprintf("%s Tniches Venn.pdf", Sex)
+					venn_filename = paste(Sex_folder, venn_filename, sep="/")
+					mymain = sprintf("%s Transcriptional Niches", Sex)
+					pdf(venn_filename)
+					vennPlot(list(vennsetdown,vennsetup), mymain=mymain, mysub="", colmode=2, ccol=c("#005BAA", "#ED1C24"))
+					dev.off()
+				} else {
+					venn_filename = sprintf("%s Tniches Venn up.pdf", Sex)
+					venn_filename = paste(Sex_folder, venn_filename, sep="/")
+					mymain = sprintf("%s Transcriptional Niches", Sex)
+					pdf(venn_filename)
+					vennPlot(list(vennsetup), mymain=mymain, mysub="", colmode=1, ccol=c("#ED1C24"))
+					title(main="Up-regulated Genes", line=.5, col.main="#ED1C24")
+					dev.off()
+					
+					venn_filename = sprintf("%s Tniches Venn down.pdf", Sex)
+					venn_filename = paste(Sex_folder, venn_filename, sep="/")
+					mymain = sprintf("%s Transcriptional Niches", Sex)
+					pdf(venn_filename)
+					vennPlot(list(vennsetdown), mymain=mymain, mysub="", colmode=1, ccol=c("#005BAA"))
+					title(main="Down-regulated Genes", line=.5, col.main="#005BAA")
+					dev.off()
+				}
+			}
+			
+			if (dn_empty & !up_empty){
+				venn_filename = sprintf("%s Tniches Venn up.pdf", Sex)
+				venn_filename = paste(Sex_folder, venn_filename, sep="/")
+				mymain = sprintf("%s Transcriptional Niches", Sex)
+				pdf(venn_filename)
+				vennsetup = overLapper(up_lst, type="vennsets")
+				vennPlot(list(vennsetup), mymain=mymain, mysub="", colmode=1, ccol=c("#ED1C24"))
+				title(main="Up-regulated Genes", line=.5, col.main="#ED1C24")
+				dev.off()
+			}
+			
+			if (up_empty & !dn_empty){
+				venn_filename = sprintf("%s Tniches Venn down.pdf", Sex)
+				venn_filename = paste(Sex_folder, venn_filename, sep="/")
+				mymain = sprintf("%s Transcriptional Niches", Sex)
+				pdf(venn_filename)
+				vennsetdown = overLapper(dn_lst, type="vennsets")
+				vennPlot(list(vennsetdown), mymain=mymain, mysub="", colmode=1, ccol=c("#005BAA"))
+				title(main="Down-regulated Genes", line=.5, col.main="#005BAA")
+				dev.off()
+			}
+			
+			if (up_empty & dn_empty){
+				venn_filename = sprintf("%s Tniches Venn empty.pdf", Sex)
+				venn_filename = paste(Sex_folder, venn_filename, sep="/")
+				mymain = sprintf("%s Transcriptional Niches", Sex)
+				pdf(venn_filename)
+				plot.new()
+				title("There were no significant differentially-expressed genes.")
+				dev.off()
+			}
+		}
+	}
+}
+
+
+
+####################################################################################################
+#									EXPORTING DATA
+####################################################################################################
+
+write.csv(anova_results_df, "anova_results_df.csv", row.names=FALSE)
+write.csv(diff_expression_df, "diff_expression_df.csv", row.names=FALSE)
+write.csv(estimate_df, "estimate_df.csv", row.names=FALSE)
+write.csv(expression_df, "expression_df.csv", row.names=FALSE)
+
+temp_col_info_df = col_info_df
+temp_col_info_df[["Line"]] = paste("Line", temp_col_info_df[["Line"]], sep="_")
+a = rbind(t(temp_col_info_df), norm_counts_mat)
+filler_mat = matrix(rep(NA,ncol(row_info_df)*ncol(temp_col_info_df)), ncol=ncol(row_info_df))
+colnames(filler_mat) = colnames(row_info_df)
+b = rbind(filler_mat, row_info_df)
+norm_counts_info_df = cbind(b, a)
+write.csv(norm_counts_info_df, "norm_counts_info_df.csv", row.names=FALSE)
+
+
+
+####################################################################################################
+#									OTHER ANALYSES
+####################################################################################################
+
+if (redundant_diverse_analysis){
+	
+	# Importing the LSMeans and Tests3 datasets from the SAS_results_Redundant_vs_Diverse folder
+	RedDiv_LSMeans = read.table(paste(file_location, "SAS_results", "Redundant_vs_Diverse_results", "LSMeans.csv", sep="/"), header=TRUE, sep=",")
+	RedDiv_Tests3 = read.table(paste(file_location, "SAS_results", "Redundant_vs_Diverse_results", "Tests3.csv", sep="/"), header=TRUE, sep=",")
+	
+	# Creating the folder which will hold all Redundant vs Diverse analyses
+	RedDiv_results_folder = "Redundant vs Diverse Results"
+	create_folder_fn(RedDiv_results_folder)
+	
+	# Sourcing the Redundant_Diverse.R script
+	source("../Input_files/Redundant_Diverse.R")
+}
+
+if (additive_epistatic_analysis){
+	# Creating the folder which will hold all Additive vs Epistatic analyses
+	AddEpi_results_folder = "Additive vs Epistatic Results"
+	create_folder_fn(AddEpi_results_folder)
+	
+	# Sourcing the Additive_Epistatic.R script
+	source("../Input_files/Additive_Epistatic.R")
+}
+
+if (redundant_diverse_analysis & additive_epistatic_analysis){
+	# Creating the folder which will hold all Redundant/Diverse vs Additive/Epistatic analyses
+	RedDiv_AddEpi_results_folder = "Redundant-Diverse vs Additive-Epistatic results"
+	create_folder_fn(RedDiv_AddEpi_results_folder)
+	
+	# Sourcing the Redundant_Diverse_vs_Additive_Epistatic.R script
+	source("../Input_files/Redundant_Diverse_vs_Additive_Epistatic.R")
+}
+
+if (
+	RNAseq_plots & figure_panels &
+	redundant_diverse_analysis &
+	additive_epistatic_analysis
+	){
+	source("../Input_files/Post_SAS_figure_panels.R")
+}
+
+if (WGCNA_networks){
+	source("../Input_files/WGCNA_networks.R")
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#####################################################################
+#####      Redundant_Diverse.R  (sourced by Post_SAS.R)     #########
+#####################################################################
+####################################################################################################
+#									REDUNDANCY VS DIVERSIFICATION
+####################################################################################################
+# Creating the list and folder that will hold the Redundant vs Diverse plots
+RedDiv_plot_lst = list()
+RedDiv_plot_folder = paste(RedDiv_results_folder, "Redundant vs Diverse Plots", sep="/")
+create_folder_fn(RedDiv_plot_folder)
+
+# Constructing the RedDiv_df for each sex. Each RedDiv_df contains only
+# the genes which belong to the transcriptional niches of interest
+# (as rows), and various columns with information relevant to measuring
+# and plotting redundant vs diverse interactions between the individual
+# paralogs.
+RedDiv_df_lst = list()
+for (sex in sex_vec){
+	
+	# Defining all_Tniche_FBID_vec, which contains all FlyBase_ID's in the transcriptional niches of interest in the given sex
+	TNdfL = Master_Tniche_lst[[sex]][["Directionless"]][Full_Tniche_genotype_vec]
+	all_Tniche_FBID_vec = c()
+	for (paralog in Tniche_genotype_vec){
+		all_Tniche_FBID_vec = union(all_Tniche_FBID_vec, TNdfL[[paralog]][["FlyBase_ID"]])
+	}
+	
+	# Initially defining RedDiv_df as row_info_df, filtered by all_Tniche_FBID_vec, to maintain all gene information
+	# for the genes that are found in at least one transcriptional niche of interest
+	RedDiv_df = row_info_df[row_info_df[["FlyBase_ID"]] %in% all_Tniche_FBID_vec,]
+	
+	# Adding a column for the Tniche Genotypes which indicates whether each gene is part of
+	# the respective paralog's transcriptional niche (1) or not (0)
+	for (paralog in Full_Tniche_genotype_vec){
+		RedDiv_df[[paste(paralog,"_Tniche", sep="")]] = as.numeric(
+			RedDiv_df[["FlyBase_ID"]] %in% TNdfL[[paralog]][["FlyBase_ID"]]
+		)
+	}
+	
+	# Adding an Estimate column for each of the paralogs from the Redundant vs Diverse ANOVA
+	for (paralog in paralog_genotype_vec){
+		
+		# Unstacking the Estimate columns from RedDiv_LSMeans and merging them with the initial RedDiv_df by FlyBase_ID
+		RedDiv_LSMeans_filtered = RedDiv_LSMeans[RedDiv_LSMeans[["Sex"]]==sex,]
+		RedDiv_df = unstack_merge_fn(RedDiv_df, RedDiv_LSMeans_filtered, "Estimate", "FlyBase_ID", "Genotype", paralog)
+		
+		# Converting the Estimate columns of RedDiv_df from factors to numeric columns
+		RedDiv_df[,length(RedDiv_df)] = as.numeric(as.character(RedDiv_df[,length(RedDiv_df)]))
+	}
+	
+	# Defining the mean and equivalence threshold columns
+	estimate_columns = RedDiv_df[,paste(paralog_genotype_vec, "Estimate", sep=".")]
+	RedDiv_df[["Mean"]] = rowMeans(estimate_columns)
+	RedDiv_df[["SD"]] = apply(estimate_columns, 1, sd)
+	RedDiv_df[[Coef_of_Var_colname]] = RedDiv_df[["SD"]]/RedDiv_df[["Mean"]]
+	
+	# Unstacking the p-value columns from RedDiv_Tests3 and merging them with the initial RedDiv_df by FlyBase_ID
+	RedDiv_df = unstack_merge_fn(RedDiv_df, RedDiv_Tests3, "ProbF", "FlyBase_ID", "Sex", sex)
+	names(RedDiv_df)[match(paste(sex, "ProbF", sep="."), names(RedDiv_df))] = pval_colname
+	
+	# Converting the p-value columns of RedDiv_df from factors to numeric columns
+	RedDiv_df[[pval_colname]] = as.numeric(as.character(RedDiv_df[[pval_colname]]))
+	
+	# Appending an FDR column for each fixed effect (FDR calculated within each fixed effect)
+	RedDiv_df[[FDR_colname]] = p.adjust(RedDiv_df[[pval_colname]], method="fdr")
+	
+	# Calculating the p-value vector that will be used as the plots' Y-axis
+	RedDiv_df[[neg_log10_pval_colname]] = -log(RedDiv_df[[pval_colname]], 10) #Does not need prior_count, since essentially no p-values will be 0.
+	
+	# Adding a significance column which indicates whether the gene has passed the multiple testing correction
+	RedDiv_df[[Sig_Div_colname]] = RedDiv_df[[FDR_colname]] < alpha
+	
+	# Reordering RedDiv_df by p-value
+	RedDiv_df = RedDiv_df[order(RedDiv_df[[pval_colname]]),]
+	
+	# Storing each sex's RedDiv_df in RedDiv_df_lst
+	RedDiv_df_lst[[sex]] = RedDiv_df
+	
+	# Saving the RedDiv_df
+	RedDiv_df_filename = paste(RedDiv_results_folder, sprintf("%s_Redundant_Diverse_df.csv", sex), sep="/")
+	write.csv(RedDiv_df, RedDiv_df_filename, row.names=FALSE)
+}
+
+
+
+# Generating plots in both normal and scatterpie formats
+for (sex in sex_vec){
+	
+	# Retrieving the RedDiv_df for each sex
+	RedDiv_df = RedDiv_df_lst[[sex]]
+	
+	# Defining the RedDiv_df without the CG13177 outlier
+	RedDiv_df_no_CG13177 = RedDiv_df[RedDiv_df[["Gene_symbol"]] != "CG13177",]
+	
+	# Calculating the fraction of genes on which the paralogs have diverse effects
+	n_diverse = sum(RedDiv_df[[Sig_Div_colname]])
+	percent_diverse = 100*n_diverse/nrow(RedDiv_df)
+	
+	# Calculating the number and percent of the RedDiv CoV's that are below the threshold (for subtitles)
+	n_CoV_below_threshold = sum(RedDiv_df[[Coef_of_Var_colname]] < CoV_threshold)
+	percent_CoV_below_threshold = 100*n_CoV_below_threshold/nrow(RedDiv_df)
+	
+	# Defining the main plot title and axis lables
+	main = bquote('Functional Diversification of '*italic('Obp50a-d')*' Paralogs in '*.(sex)*'s')
+	subtitle = sprintf(
+		"%s/%s (%.2f%%) Significantly Diverse | %s/%s (%.2f%%) where CoV < %s", 
+		n_diverse, 
+		nrow(RedDiv_df), 
+		percent_diverse, 
+		n_CoV_below_threshold,
+		nrow(RedDiv_df),
+		percent_CoV_below_threshold,
+		CoV_threshold
+	)
+	xlab = "Coefficient of Variation"
+	ylab = expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+	
+	# Generating the plots
+	# sig_plot(RedDiv_df[[Coef_of_Var_colname]], RedDiv_df[[neg_log10_pval_colname]], RedDiv_df[[Sig_Div_colname]], col_thresh=0, main=main, xlab=xlab, ylab=ylab)
+	# title(main=subtitle, line=.5, font.main=1)
+	FDR_line_height = FDR_line_height_fn(RedDiv_df[[neg_log10_pval_colname]], RedDiv_df[[Sig_Div_colname]])
+	# abline(h=FDR_line_height, col="red")
+	
+	# Saving the plots (-log10(pval) vs log norm count)
+	# RedDiv_plot_lst[[sex]] = recordPlot()
+	# global_plt_lst[[sprintf("%s_RedDiv_Volc", sex)]] = recordPlot()
+	# RedDiv_plot_filename = sprintf("%s/%s_RedDiv_plot.png", RedDiv_plot_folder, sex)
+	# png(RedDiv_plot_filename, width=7.5, height=5, units = "in", res=400)
+	# replayPlot(RedDiv_plot_lst[[sex]])
+	# dev.off()
+	
+	# Scatterpie plots
+	RedDiv_scatterpie_plot_filename = sprintf("%s/%s_RedDiv_scatterpie_plot.pdf", RedDiv_plot_folder, sex)
+	if (sex=="Female"){ #Female-specific settings - if the data changes, these will likely need to as well.
+		pdf(RedDiv_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 1
+	}
+	if (sex=="Male"){ #Male-specific settings - if the data changes, these will likely need to as well.
+		pdf(RedDiv_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 0.5
+	}
+	plt = scatterpie_plot_fn(
+		dataframe=RedDiv_df, 
+		x_colname=Coef_of_Var_colname, 
+		y_colname=neg_log10_pval_colname,
+		pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+		pieslice_label_vec=Full_Tniche_genotypes_italic,
+		pieslice_color_lst=genotype_col_lst_tmp,
+		pieslice_legend_title=pieslice_legend_title,
+		pie_scale=pie_scale,
+		main=main,
+		subtitle=subtitle,
+		xlab=xlab,
+		ylab=ylab,
+		y_to_x_axis_ratio=1,
+		vline_linetype = 2,
+		hline = Sig_Div_colname,
+		vline = CoV_threshold,
+		hline_name = sprintf("FDR = %s", alpha),
+		vline_name = "CoV = 0.2"
+	)
+	print(plt)
+	dev.off()
+	
+	# Saving the scatterpie plots
+	global_plt_lst[[sprintf("%s_RedDiv_Volc_scatterpie", sex)]] = plt
+	
+	# Scatterpie plot without the CG13177 extreme outlier
+	if (sex=="Male"){
+		RedDiv_scatterpie_plot_no_CG13177_filename = sprintf("%s/%s_RedDiv_scatterpie_plot_no_CG13177.pdf", RedDiv_plot_folder, sex)
+		pdf(RedDiv_scatterpie_plot_no_CG13177_filename, width=7, height=7)
+		pie_scale = 0.5
+		
+		plt = scatterpie_plot_fn(
+			dataframe=RedDiv_df_no_CG13177, 
+			x_colname=Coef_of_Var_colname, 
+			y_colname=neg_log10_pval_colname,
+			pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+			pieslice_label_vec=Full_Tniche_genotypes_italic,
+			pieslice_color_lst=genotype_col_lst_tmp,
+			pieslice_legend_title=pieslice_legend_title,
+			pie_scale=pie_scale,
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			vline_linetype = 2,
+			hline = Sig_Div_colname,
+			vline = CoV_threshold,
+			hline_name = sprintf("FDR = %s", alpha),
+			vline_name = "CoV = 0.2"
+		)
+		print(plt)
+		dev.off()
+		
+		# Saving the scatterpie plots
+		global_plt_lst[[sprintf("%s_RedDiv_Volc_scatterpie_no_CG13177", sex)]] = plt
+	}
+}
+
+View(RedDiv_df)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#####################################################################
+#####     Additive_Epistatic.R   (sourced by Post_SAS.R)    #########
+#####################################################################
+####################################################################################################
+#									ADDITIVE VS EPISTATIC
+####################################################################################################
+# Creating a list which contains the SAS label names for the Additive vs Epistatic
+# LSMEstimates for each sex
+AddEpi_LSMEst_lst = list(
+	"Female" = "Female_additive_epistatic",
+	"Male" = "Male_additive_epistatic"
+)
+
+# Initializing the list which will contain the AddEpi_df for each sex. Each
+# AddEpi_df contains only the genes which belong to the transcriptional niches
+# of interest (as rows), and various columns with information relevant to
+# measuring and plotting additive vs epistastic interactions between the
+# individual paralogs.
+AddEpi_df_lst = list()
+
+# Creating the list and folder that will hold the Additive vs Epistatic volcano plots
+AddEpi_Volc_plot_lst = list()
+AddEpi_Volc_plot_folder = paste(AddEpi_results_folder, "Additive vs Epistatic Volcano Plots", sep="/")
+create_folder_fn(AddEpi_Volc_plot_folder)
+
+# Constructing the AddEpi_df for each sex
+for (sex in sex_vec){
+	
+	# Retrieving the AddEpi_LSMEst for each sex
+	AddEpi_LSMEst = AddEpi_LSMEst_lst[[sex]]
+	
+	# Defining all_Tniche_FBID_vec, which contains all FlyBase_ID's in the transcriptional niches of interest in the given sex
+	TNdfL = Master_Tniche_lst[[sex]][["Directionless"]][Full_Tniche_genotype_vec]
+	all_Tniche_FBID_vec = c()
+	for (genotype in Tniche_genotype_vec){
+		all_Tniche_FBID_vec = union(all_Tniche_FBID_vec, TNdfL[[genotype]][["FlyBase_ID"]])
+	}
+	
+	# Initializing AddEpi_df as row_info_df, filtered by all_Tniche_FBID_vec, to maintain all gene information
+	# for the genes that are found in at least one transcriptional niche of interest.
+	AddEpi_df = row_info_df[row_info_df[["FlyBase_ID"]] %in% all_Tniche_FBID_vec,]
+	
+	# Defining all_Tniche_estimate_df to be estimate_df with only genes in the transcriptional niches of interest
+	all_Tniche_estimate_df = estimate_df[row_info_df[["FlyBase_ID"]] %in% all_Tniche_FBID_vec,]
+	
+	# Adding a column for the Tniche Genotypes which indicates whether each gene is part of
+	# the respective Genotype's transcriptional niche (1) or not (0)
+	for (genotype in Full_Tniche_genotype_vec){
+		AddEpi_df[[paste(genotype,"_Tniche", sep="")]] = as.numeric(
+			AddEpi_df[["FlyBase_ID"]] %in% TNdfL[[genotype]][["FlyBase_ID"]]
+		)
+	}
+	
+	# Unstacking the p-value and estimate columns from LSMEstimates and merging them with the initial AddEpi_df by FlyBase_ID
+	AddEpi_df = unstack_merge_fn(AddEpi_df, LSMEstimates, c("Probt", "Estimate"), "FlyBase_ID", "Label", AddEpi_LSMEst)
+	names(AddEpi_df)[match(paste(AddEpi_LSMEst, "Probt", sep="."), names(AddEpi_df))] = pval_colname
+	names(AddEpi_df)[match(paste(AddEpi_LSMEst, "Estimate", sep="."), names(AddEpi_df))] = diff_estimate_colname
+	
+	# Converting the p-value column of AddEpi_df from a factor to a numeric column
+	AddEpi_df[[pval_colname]] = as.numeric(as.character(AddEpi_df[[pval_colname]]))
+	
+	# Appending FDR columns
+	AddEpi_df[[FDR_colname]] = p.adjust(AddEpi_df[[pval_colname]], method="fdr")
+	
+	# Defining the vectors that will become new columns in AddEpi_df.
+	neg_log10_pval_vec = -log(AddEpi_df[[pval_colname]], 10) #Does not need prior_count, since essentially no p-values will be 0.
+	
+	# Appending the new AddEpi_df columns
+	AddEpi_df[[neg_log10_pval_colname]] = neg_log10_pval_vec
+	AddEpi_df[[piecewise_log_Est_colname]] = sign(AddEpi_df[[diff_estimate_colname]])*log(abs(AddEpi_df[[diff_estimate_colname]]) + 1, 10)
+	
+	# Adding a significance column which indicates whether the gene has passed the multiple testing correction
+	AddEpi_df[[Sig_Epi_colname]] = AddEpi_df[[FDR_colname]] < alpha
+	
+	# Reordering AddEpi_df by p-value
+	AddEpi_df = AddEpi_df[order(AddEpi_df[[pval_colname]]),]
+	
+	# Storing each sex's AddEpi_df in diverse_anova_results_df_lst
+	AddEpi_df_lst[[sex]] = AddEpi_df
+	
+	# Saving the AddEpi_df
+	AddEpi_df_filename = paste(AddEpi_results_folder, sprintf("%s_Additive_Epistatic_df.csv", sex), sep="/")
+	write.csv(AddEpi_df, AddEpi_df_filename, row.names=FALSE)
+}
+
+
+
+# Generating volcano plots for each sex, in both normal and scatterpie formats
+for (sex in sex_vec){
+	# Retrieving the AddEpi_LSMEst for each sex
+	AddEpi_LSMEst = AddEpi_LSMEst_lst[[sex]]
+	
+	# Retrieving the AddEpi_df for each sex
+	AddEpi_df = AddEpi_df_lst[[sex]]
+	
+	# Defining the AddEpi_df without the CG13177 outlier
+	AddEpi_df_no_CG13177 = AddEpi_df[AddEpi_df[["Gene_symbol"]] != "CG13177",]
+	
+	# Calculating the fraction of genes on which the paralogs have epistatic effects
+	n_epistatic = sum(AddEpi_df[[Sig_Epi_colname]])
+	percent_epistatic = 100*n_epistatic/nrow(AddEpi_df)
+	
+	# Calculating the number of Tniche genes on which the paralogs of interest have an
+	# enhancing epistatic effect, or in other words are significantly "up" in the 
+	# (Pos–Neg)–[(a–Neg)+(b–Neg)+(c–Neg)+(d–Neg)] LSMEstimate.
+	n_epistatic_up = sum(AddEpi_df[[Sig_Epi_colname]] & AddEpi_df[[diff_estimate_colname]] > 0)
+	percent_epistatic_up = 100*n_epistatic_up/sum(AddEpi_df[[Sig_Epi_colname]])
+	if (!is.finite(percent_epistatic_up)){percent_epistatic_up = 0}
+	
+	# Defining an informative subtitle to be used in the volcano plots
+	subtitle = sprintf("%s/%s=%.2f%% Significantly Epistatic (%s/%s=%.2f%% Enhancing)", 
+		n_epistatic, 
+		length(AddEpi_df[[neg_log10_pval_colname]]), 
+		percent_epistatic,
+		n_epistatic_up,
+		n_epistatic,
+		percent_epistatic_up
+	)
+	
+	# Volcano plots (-log10(p-value) vs -log10(p) of the epistasis estimate)
+	main = bquote('Epistasis in '*.(sex)*' '*italic('Obp50a-d')*' Transcriptional Niches Volcano Plot')
+	xlab = expression('Deviation from Additivity')
+	ylab = expression('-log'[10]*'('*italic(p)[italic('Epistatic')]*')')
+	# sig_plot(
+		# AddEpi_df[[piecewise_log_Est_colname]], 
+		# AddEpi_df[[neg_log10_pval_colname]], 
+		# AddEpi_df[[Sig_Epi_colname]],
+		# col_axis="x", 
+		# col_thresh=0,
+		# main=main, 
+		# xlab=xlab, 
+		# ylab=ylab
+	# )
+	# title(main=subtitle, line=.5, font.main=1, cex.main=.9)
+	FDR_line_height = FDR_line_height_fn(AddEpi_df[[neg_log10_pval_colname]], AddEpi_df[[Sig_Epi_colname]])
+	# abline(h=FDR_line_height, col="red")
+	# AddEpi_Volc_plot_lst[[AddEpi_LSMEst]] = recordPlot()
+	
+	# Saving the scatterpie plots
+	# global_plt_lst[[sprintf("%s_AddEpi_Volc", sex)]] = recordPlot()
+	
+	# AddEpi_Volc_plot_filename = sprintf("%s/%s_AddEpi_Volc_plot.png", AddEpi_Volc_plot_folder, sex)
+	# png(AddEpi_Volc_plot_filename, width=7.5, height=5, units = "in", res=400)
+	# replayPlot(AddEpi_Volc_plot_lst[[AddEpi_LSMEst]])
+	# dev.off()
+	
+	# Scatterpie volcano plots
+	AddEpi_scatterpie_Volc_plot_filename = sprintf("%s/%s_AddEpi_scatterpie_Volc_plot.pdf", AddEpi_Volc_plot_folder, sex)
+	if (sex=="Female"){ #Female-specific settings - if the data changes, these will likely need to as well.
+		pdf(AddEpi_scatterpie_Volc_plot_filename, width=7, height=7)
+		pie_scale = 1
+		x_upper_limit = 0
+		if (max(AddEpi_df[[piecewise_log_Est_colname]]) > 0){
+			x_upper_limit = NA
+		}
+	}
+	if (sex=="Male"){ #Male-specific settings - if the data changes, these will likely need to as well.
+		pdf(AddEpi_scatterpie_Volc_plot_filename, width=7, height=7)
+		pie_scale = 0.5
+		x_upper_limit = NA
+	}
+	
+	plt = scatterpie_plot_fn(
+		dataframe=AddEpi_df, 
+		x_colname=piecewise_log_Est_colname, 
+		y_colname=neg_log10_pval_colname,
+		pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+		pieslice_label_vec=Full_Tniche_genotypes_italic,
+		pieslice_color_lst=genotype_col_lst_tmp,
+		pieslice_legend_title=pieslice_legend_title,
+		pie_scale=pie_scale,
+		main=main,
+		subtitle=subtitle,
+		xlab=xlab,
+		ylab=ylab,
+		y_to_x_axis_ratio=1,
+		hline = Sig_Epi_colname,
+		vline = NA,
+		hline_name = sprintf("FDR = %s", alpha),
+		vline_name = "",
+		x_log10piecewise = TRUE,
+		x_limits = c(NA, x_upper_limit)
+	)
+	
+	print(plt)
+	dev.off()
+	
+	# Saving the scatterpie plots
+	global_plt_lst[[sprintf("%s_AddEpi_Volc_scatterpie", sex)]] = plt
+	
+	# Male Scatterpie volcano plot without CG13177, which is an extreme outlier that causes
+	# the rest of the plot to be much smaller:
+	scatterpie_volcano_plot_no_CG13177_filename = sprintf("%s/%s_scatterpie_volcano_plot_no_CG13177.pdf", AddEpi_Volc_plot_folder, sex)
+	if (sex=="Male"){
+		pdf(scatterpie_volcano_plot_no_CG13177_filename, width=7, height=7)
+		
+		plt = scatterpie_plot_fn(
+			dataframe=AddEpi_df_no_CG13177, 
+			x_colname=piecewise_log_Est_colname, 
+			y_colname=neg_log10_pval_colname,
+			pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+			pieslice_label_vec=Full_Tniche_genotypes_italic,
+			pieslice_color_lst=genotype_col_lst_tmp,
+			pieslice_legend_title=pieslice_legend_title,
+			pie_scale=pie_scale,
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = Sig_Epi_colname,
+			vline = NA,
+			hline_name = sprintf("FDR = %s", alpha),
+			vline_name = "",
+			x_log10piecewise = TRUE,
+			x_limits = c(NA, x_upper_limit)
+		)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the scatterpie plot
+		global_plt_lst[[sprintf("%s_AddEpi_Volc_scatterpie_no_CG13177", sex)]] = plt
+	}
+}
+
+View(AddEpi_df)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+######################################################################################
+#####    Redundant_Diverse_vs_Additive_Epistatic.R  (sourced by Post_SAS.R)  #########
+######################################################################################
+# Creating the folder which will hold all Redundant/Diverse vs Additive/Epistatic plots
+RedDiv_AddEpi_plots_folder = paste(
+	RedDiv_AddEpi_results_folder, 
+	"Redundant-Diverse vs Additive-Epistatic plots", 
+	sep="/"
+)
+create_folder_fn(RedDiv_AddEpi_plots_folder)
+
+
+
+# Defining the columns which would be unnecessary duplicates when RedDiv_df and AddEpi_df are merged. These 
+# will be kept in RedDiv_df but deleted from AddEpi_df. They will also not be renamed to have a source-specific 
+# prefix (either "RedDiv_" or "AddEpi_") in the merged dataframe, since they not only share the same column 
+# names between the source dataframes, but also share the same contents.
+Dup_colname_vec = c("FlyBase_ID", "Entrez_ID", "Gene_symbol", "Length", paste(Full_Tniche_genotype_vec, "_Tniche", sep=""))
+
+# Initializing the list which will contain the RedDiv_AddEpi_df for each sex. Each
+# RedDiv_AddEpi_df contains only the genes which belong to the transcriptional niches
+# of interest (as rows), and various columns with information relevant to
+# measuring and plotting redundant vs diverse and additive vs epistastic interactions 
+# between the individual paralogs.
+RedDiv_AddEpi_df_lst = list()
+
+# Constructing the RedDiv_AddEpi_df for each sex
+for (sex in sex_vec){
+	
+	# Retrieving RedDiv_df and AddEpi_df for each sex
+	RedDiv_df = RedDiv_df_lst[[sex]]
+	AddEpi_df = AddEpi_df_lst[[sex]]
+	
+	# Ordering RedDiv_df and AddEpi_df by FlyBase_ID to enable merging
+	RedDiv_df = RedDiv_df[order(RedDiv_df[["FlyBase_ID"]]),]
+	AddEpi_df = AddEpi_df[order(AddEpi_df[["FlyBase_ID"]]),]
+	
+	# Deleting columns from AddEpi_df that would be duplicates when AddEpi_df is merged with RedDiv_df
+	AddEpi_df_no_Dups = AddEpi_df[,!names(AddEpi_df) %in% Dup_colname_vec]
+	
+	# Renaming columns in RedDiv_df to distinguish them from identically-named columns in AddEpi_df_no_Dups
+	RedDiv_to_rename = !names(RedDiv_df) %in% Dup_colname_vec
+	names(RedDiv_df)[RedDiv_to_rename] = paste("RedDiv_", names(RedDiv_df)[RedDiv_to_rename], sep="")
+	
+	# Renaming columns in AddEpi_df_no_Dups to distinguish them from identically-named columns in RedDiv_df
+	names(AddEpi_df_no_Dups) = paste("AddEpi_", names(AddEpi_df_no_Dups), sep="")
+	
+	# Merging RedDiv_df and AddEpi_df_no_Dups
+	RedDiv_AddEpi_df = cbind(RedDiv_df, AddEpi_df_no_Dups)
+	
+	# Storing each sex's RedDiv_AddEpi_df in RedDiv_AddEpi_df_lst
+	RedDiv_AddEpi_df_lst[[sex]] = RedDiv_AddEpi_df
+	
+	# Saving the RedDiv_AddEpi_df
+	RedDiv_AddEpi_df_filename = paste(RedDiv_AddEpi_results_folder, sprintf("%s_Redundant_Diverse_Additive_Epistatic_df.csv", sex), sep="/")
+	write.csv(RedDiv_AddEpi_df, RedDiv_AddEpi_df_filename, row.names=FALSE)
+}
+
+
+
+# Generating Redundant/Diverse vs Additive/Epistatic scatterpie plots
+for (sex in sex_vec){
+	
+	# Retrieving the RedDiv_AddEpi_df for each sex
+	RedDiv_AddEpi_df = RedDiv_AddEpi_df_lst[[sex]]
+	
+	# Defining the RedDiv_AddEpi_df without the CG13177 outlier
+	RedDiv_AddEpi_df_no_CG13177 = RedDiv_AddEpi_df[RedDiv_AddEpi_df[["Gene_symbol"]] != "CG13177",]
+	
+	# Calculating the fraction of genes on which the paralogs have diverse effects
+	n_diverse = sum(RedDiv_AddEpi_df[["RedDiv_Sig_Div"]])
+	percent_diverse = 100*n_diverse/nrow(RedDiv_AddEpi_df)
+	
+	# Calculating the number and percent of the RedDiv CoV's that are below the threshold (for subtitles)
+	n_CoV_below_threshold = sum(RedDiv_AddEpi_df[[paste("RedDiv_", Coef_of_Var_colname, sep="")]] < CoV_threshold)
+	percent_CoV_below_threshold = 100*n_CoV_below_threshold/nrow(RedDiv_AddEpi_df)	
+	
+	# Calculating the fraction of genes on which the paralogs have epistatic effects
+	n_epistatic = sum(RedDiv_AddEpi_df[["AddEpi_Sig_Epi"]])
+	percent_epistatic = 100*n_epistatic/nrow(RedDiv_AddEpi_df)
+	
+	# Calculating the number of Tniche genes on which the paralogs of interest have an
+	# enhancing epistatic effect, or in other words are significantly "up" in the 
+	# (Pos–Neg)–[(a–Neg)+(b–Neg)+(c–Neg)+(d–Neg)] LSMEstimate.
+	n_epistatic_up = sum(RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]] & RedDiv_AddEpi_df[[paste("AddEpi_", diff_estimate_colname, sep="")]] > 0)
+	percent_epistatic_up = 100*n_epistatic_up/sum(RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]])
+	if (!is.finite(percent_epistatic_up)){percent_epistatic_up = 0}
+	
+	# Calculating the number of Tniche genes on which the paralogs of interest have a
+	# positive devation from additivity, or in other words are "up" in the 
+	# (Pos–Neg)–[(a–Neg)+(b–Neg)+(c–Neg)+(d–Neg)] LSMEstimate.
+	n_Add_devation_up = sum(RedDiv_AddEpi_df[[paste("AddEpi_", diff_estimate_colname, sep="")]] > 0)
+	percent_Add_deviation_up = 100*n_Add_devation_up/nrow(RedDiv_AddEpi_df)
+	
+	# Calculating the number of genes which are redundant and additive, redundant and epistatic,
+	# diverse and additive, and diverse and epistatic.
+	n_Red_Add = sum(
+		!RedDiv_AddEpi_df[[paste("RedDiv_", Sig_Div_colname, sep="")]] & 
+		!RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]]
+	)
+	n_Red_Epi = sum(
+		!RedDiv_AddEpi_df[[paste("RedDiv_", Sig_Div_colname, sep="")]] & 
+		RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]]
+	)
+	n_Div_Add = sum(
+		RedDiv_AddEpi_df[[paste("RedDiv_", Sig_Div_colname, sep="")]] & 
+		!RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]]
+	)
+	n_Div_Epi = sum(
+		RedDiv_AddEpi_df[[paste("RedDiv_", Sig_Div_colname, sep="")]] & 
+		RedDiv_AddEpi_df[[paste("AddEpi_", Sig_Epi_colname, sep="")]]
+	)
+	
+
+	
+	# Generating the RedDiv pval vs AddEpi estimate scatterpie plot
+	RedDiv_pval_AddEpi_Est_scatterpie_plot_filename = sprintf("%s/%s_RedDiv_pval_AddEpi_Est_scatterpie.pdf", RedDiv_AddEpi_plots_folder, sex)
+	if (sex == "Male"){
+		pdf(RedDiv_pval_AddEpi_Est_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 0.5
+		x_upper_limit = NA
+	}
+	if (sex == "Female"){
+		pdf(RedDiv_pval_AddEpi_Est_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 1
+		x_upper_limit = 0
+		if (max(AddEpi_df[[piecewise_log_Est_colname]]) > 0){
+			x_upper_limit = NA
+		}
+	}
+	
+	main=bquote(.(sex)*' Diversification '*italic(p)*'-value vs Epistasis Estimate')
+	subtitle = bquote(
+		.(n_diverse)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_diverse, 2))*'%) Significantly Diverse | '*
+		.(n_Add_devation_up)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_Add_deviation_up, 2))*'%) where Dev. from Add. > 0'
+	)
+	xlab=expression('Deviation from Additivity')
+	ylab=expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+	
+	plt = scatterpie_plot_fn(
+		dataframe=RedDiv_AddEpi_df, 
+		x_colname=paste("AddEpi_", piecewise_log_Est_colname, sep=""), 
+		y_colname=paste("RedDiv_", neg_log10_pval_colname, sep=""),
+		pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+		pieslice_label_vec=Full_Tniche_genotypes_italic,
+		pieslice_color_lst=genotype_col_lst_tmp,
+		pieslice_legend_title=pieslice_legend_title,
+		pie_scale=pie_scale,
+		main=main,
+		subtitle=subtitle,
+		xlab=xlab,
+		ylab=ylab,
+		y_to_x_axis_ratio=1,
+		hline = paste("RedDiv_", Sig_Div_colname, sep=""),
+		vline = NA,
+		hline_name = sprintf("FDR = %s", alpha),
+		vline_name = "",
+		x_log10piecewise = TRUE,
+		x_limits = c(NA, x_upper_limit)
+	)
+	
+	print(plt)
+	dev.off()
+	
+	# Saving the plot
+	global_plt_lst[[sprintf("%s_RedDiv_pval_AddEpi_Est_scatterpie", sex)]] = plt
+	
+	
+	
+	# Generating the RedDiv CoV vs AddEpi estimate scatterpie plot
+	RedDiv_CoV_AddEpi_Est_scatterpie_plot_filename = sprintf("%s/%s_RedDiv_CoV_AddEpi_Est_scatterpie.pdf", RedDiv_AddEpi_plots_folder, sex)
+	if (sex == "Male"){
+		pdf(RedDiv_CoV_AddEpi_Est_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 0.5
+		x_upper_limit = NA
+	}
+	if (sex == "Female"){
+		pdf(RedDiv_CoV_AddEpi_Est_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 1
+		x_upper_limit = 0
+		if (max(AddEpi_df[[piecewise_log_Est_colname]]) > 0){
+			x_upper_limit = NA
+		}
+	}
+	
+	main=bquote(.(sex)*' Coefficient of Variation vs Epistasis Estimate')
+	subtitle = bquote(
+		.(n_CoV_below_threshold)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_CoV_below_threshold, 2))*'%) where CoV < '*.(CoV_threshold)*' | '*
+		.(n_Add_devation_up)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_Add_deviation_up, 2))*'%) where Dev. from Add. > 0'
+	)
+	xlab=expression('Deviation from Additivity')
+	ylab = "Coefficient of Variation"
+	
+	plt = scatterpie_plot_fn(
+		dataframe=RedDiv_AddEpi_df, 
+		x_colname=paste("AddEpi_", piecewise_log_Est_colname, sep=""), 
+		y_colname=paste("RedDiv_", Coef_of_Var_colname, sep=""),
+		pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+		pieslice_label_vec=Full_Tniche_genotypes_italic,
+		pieslice_color_lst=genotype_col_lst_tmp,
+		pieslice_legend_title=pieslice_legend_title,
+		pie_scale=pie_scale,
+		main=main,
+		subtitle=subtitle,
+		xlab=xlab,
+		ylab=ylab,
+		y_to_x_axis_ratio=1,
+		hline = CoV_threshold,
+		vline = NA,
+		hline_name = sprintf("CoV = %s", CoV_threshold),
+		vline_name = "",
+		hline_linetype = 2,
+		x_log10piecewise = TRUE,
+		x_limits = c(NA, x_upper_limit)
+	)
+	
+	print(plt)
+	dev.off()
+	
+	# Saving the plot
+	global_plt_lst[[sprintf("%s_RedDiv_CoV_AddEpi_Est_scatterpie", sex)]] = plt
+	
+	
+	
+	# Generating the RedDiv CoV vs AddEpi estimate scatterpie plot without the CG13177 extreme outlier
+	if (sex == "Male"){
+		RedDiv_CoV_AddEpi_Est_scatterpie_plot_no_CG13177_filename = sprintf("%s/%s_RedDiv_CoV_AddEpi_Est_scatterpie_no_CG13177.pdf", RedDiv_AddEpi_plots_folder, sex)
+		pdf(RedDiv_CoV_AddEpi_Est_scatterpie_plot_no_CG13177_filename, width=7, height=7)
+		pie_scale = 0.5
+		
+		main=bquote(.(sex)*' Coefficient of Variation vs Epistasis Estimate')
+		subtitle = bquote(
+			.(n_CoV_below_threshold)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_CoV_below_threshold, 2))*'%) where CoV < '*.(CoV_threshold)*' | '*
+			.(n_Add_devation_up)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_Add_deviation_up, 2))*'%) where Dev. from Add. > 0'
+		)
+		xlab=expression('Deviation from Additivity')
+		ylab = "Coefficient of Variation"
+		
+		plt = scatterpie_plot_fn(
+			dataframe=RedDiv_AddEpi_df_no_CG13177, 
+			x_colname=paste("AddEpi_", piecewise_log_Est_colname, sep=""), 
+			y_colname=paste("RedDiv_", Coef_of_Var_colname, sep=""),
+			pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+			pieslice_label_vec=Full_Tniche_genotypes_italic,
+			pieslice_color_lst=genotype_col_lst_tmp,
+			pieslice_legend_title=pieslice_legend_title,
+			pie_scale=pie_scale,
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = CoV_threshold,
+			vline = NA,
+			hline_name = sprintf("CoV = %s", CoV_threshold),
+			vline_name = "",
+			hline_linetype = 2,
+			x_log10piecewise = TRUE,
+			x_limits=c(-3.6, 2.7),
+			y_limits= c(-0.05, 0.75)
+		)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_CoV_AddEpi_Est_scatterpie_no_CG13177", sex)]] = plt
+		
+	}
+	
+	
+	
+	# Generating the RedDiv pval vs AddEpi pval scatterpie plot
+	RedDiv_pval_AddEpi_pval_scatterpie_plot_filename = sprintf("%s/%s_RedDiv_pval_AddEpi_pval_scatterpie.pdf", RedDiv_AddEpi_plots_folder, sex)
+	if (sex == "Male"){
+		pdf(RedDiv_pval_AddEpi_pval_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 0.5
+	}
+	if (sex == "Female"){
+		pdf(RedDiv_pval_AddEpi_pval_scatterpie_plot_filename, width=7, height=7)
+		pie_scale = 1
+	}
+	
+	main=bquote(.(sex)*' Diversification '*italic(p)*'-value vs Epistasis '*italic(p)*'-value')
+	subtitle = bquote(
+			.(n_Red_Add)*'/'*.(nrow(RedDiv_AddEpi_df))*' Red. & Add. | '*
+			.(n_Red_Epi)*'/'*.(nrow(RedDiv_AddEpi_df))*' Red. & Epi. | '*
+			.(n_Div_Add)*'/'*.(nrow(RedDiv_AddEpi_df))*' Div. & Add. | '*
+			.(n_Div_Epi)*'/'*.(nrow(RedDiv_AddEpi_df))*' Div. & Epi.'
+		)
+	xlab=expression('-log'[10]*'('*italic(p)[italic('Epistatic')]*')')
+	ylab=expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+	
+	plt = scatterpie_plot_fn(
+		dataframe=RedDiv_AddEpi_df, 
+		x_colname=paste("AddEpi_", neg_log10_pval_colname, sep=""), 
+		y_colname=paste("RedDiv_", neg_log10_pval_colname, sep=""),
+		pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+		pieslice_label_vec=Full_Tniche_genotypes_italic,
+		pieslice_color_lst=genotype_col_lst_tmp,
+		pieslice_legend_title=pieslice_legend_title,
+		pie_scale=pie_scale,
+		main=main,
+		subtitle=subtitle,
+		xlab=xlab,
+		ylab=ylab,
+		y_to_x_axis_ratio=1,
+		hline = paste("RedDiv_", Sig_Div_colname, sep=""),
+		vline = paste("AddEpi_", Sig_Epi_colname, sep=""),
+		hline_name = sprintf("FDR = %s", alpha),
+		vline_name = sprintf("FDR = %s", alpha),
+		x_log10piecewise = FALSE,
+		x_limits = c(NA, NA)
+	)
+	
+	print(plt)
+	dev.off()
+	
+	# Saving the plot
+	global_plt_lst[[sprintf("%s_RedDiv_pval_AddEpi_pval_scatterpie", sex)]] = plt
+	
+	
+	
+	# Generating the Male RedDiv pval vs AddEpi pval scatterpie plot without the CG13177 extreme outlier
+	if (sex == "Male"){
+		RedDiv_pval_AddEpi_pval_scatterpie_plot_no_CG13177_filename = sprintf("%s/%s_RedDiv_pval_AddEpi_pval_scatterpie_no_CG13177.pdf", RedDiv_AddEpi_plots_folder, sex)
+		pdf(RedDiv_pval_AddEpi_pval_scatterpie_plot_no_CG13177_filename, width=7, height=7)
+		pie_scale = 0.5
+		
+		main=bquote(.(sex)*' Diversification '*italic(p)*'-value vs Epistasis '*italic(p)*'-value')
+		subtitle = bquote(
+				.(n_Red_Add)*'/'*.(nrow(RedDiv_AddEpi_df))*' Red. & Add. | '*
+				.(n_Red_Epi)*'/'*.(nrow(RedDiv_AddEpi_df))*' Red. & Epi. | '*
+				.(n_Div_Add)*'/'*.(nrow(RedDiv_AddEpi_df))*' Div. & Add. | '*
+				.(n_Div_Epi)*'/'*.(nrow(RedDiv_AddEpi_df))*' Div. & Epi.'
+			)
+		xlab=expression('-log'[10]*'('*italic(p)[italic('Epistatic')]*')')
+		ylab=expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+		
+		plt = scatterpie_plot_fn(
+			dataframe=RedDiv_AddEpi_df_no_CG13177, 
+			x_colname=paste("AddEpi_", neg_log10_pval_colname, sep=""), 
+			y_colname=paste("RedDiv_", neg_log10_pval_colname, sep=""),
+			pieslice_colname_vec=paste(Full_Tniche_genotype_vec, "_Tniche", sep=""),
+			pieslice_label_vec=Full_Tniche_genotypes_italic,
+			pieslice_color_lst=genotype_col_lst_tmp,
+			pieslice_legend_title=pieslice_legend_title,
+			pie_scale=pie_scale,
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = paste("RedDiv_", Sig_Div_colname, sep=""),
+			vline = paste("AddEpi_", Sig_Epi_colname, sep=""),
+			hline_name = sprintf("FDR = %s", alpha),
+			vline_name = sprintf("FDR = %s", alpha),
+			x_log10piecewise = FALSE,
+			x_limits=c(-0.4, 6),
+			y_limits=c(-0.2, 4.6)
+		)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_pval_AddEpi_pval_scatterpie_no_CG13177", sex)]] = plt
+	}
+	
+	
+	
+	# Generating the RedDiv pval vs AddEpi pval 2D density plot
+	RedDiv_pval_AddEpi_pval_density_plot_filename = sprintf("%s/%s_RedDiv_pval_AddEpi_pval_density.pdf", RedDiv_AddEpi_plots_folder, sex)
+	if (sex == "Male"){
+		pdf(RedDiv_pval_AddEpi_pval_density_plot_filename, width=7, height=7)
+		main = bquote(.(sex)*' Diversification '*italic(p)*'-value vs Epistasis '*italic(p)*'-value')
+		xlab=expression('-log'[10]*'('*italic(p)[italic('Epistatic')]*')')
+		ylab=expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+		subtitle = bquote(
+			.(round(100*n_Red_Add/nrow(RedDiv_AddEpi_df), 2))*'%'*' Red. & Add. | '*
+			.(round(100*n_Red_Epi/nrow(RedDiv_AddEpi_df), 2))*'%'*' Red. & Epi. | '*
+			.(round(100*n_Div_Add/nrow(RedDiv_AddEpi_df), 2))*'%'*' Div. & Add. | '*
+			.(round(100*n_Div_Epi/nrow(RedDiv_AddEpi_df), 2))*'%'*' Div. & Epi.'
+		)
+		
+		plt = density_plot_fn(
+			dataframe = RedDiv_AddEpi_df, 
+			x_colname = paste("AddEpi_", neg_log10_pval_colname, sep=""), 
+			y_colname = paste("RedDiv_", neg_log10_pval_colname, sep=""),
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = paste("RedDiv_", Sig_Div_colname, sep=""),
+			vline = paste("AddEpi_", Sig_Epi_colname, sep=""),
+			line_name = sprintf("FDR = %s", alpha),
+			linetype = 1,
+			line_color="red",
+			x_log10piecewise = FALSE,
+			y_log10piecewise = FALSE,
+			x_limits=c(-0.4, 21),
+			y_limits=c(-0.2, 4.6)
+			)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_pval_AddEpi_pval_density", sex)]] = plt
+	}
+	
+	
+	# Generating the RedDiv pval vs AddEpi pval 2D density plot without the extreme CG13177 outlier
+	RedDiv_pval_AddEpi_pval_density_plot_no_CG13177_filename = sprintf("%s/%s_RedDiv_pval_AddEpi_pval_density_no_CG13177.pdf", RedDiv_AddEpi_plots_folder, sex)
+	if (sex == "Male"){
+		pdf(RedDiv_pval_AddEpi_pval_density_plot_no_CG13177_filename, width=7, height=7)
+		main = bquote(.(sex)*' Diversification '*italic(p)*'-value vs Epistasis '*italic(p)*'-value')
+		xlab=expression('-log'[10]*'('*italic(p)[italic('Epistatic')]*')')
+		ylab=expression('-log'[10]*'('*italic(p)[italic('Diverse')]*')')
+		subtitle = bquote(
+			.(round(100*n_Red_Add/nrow(RedDiv_AddEpi_df), 2))*'%'*' Red. & Add. | '*
+			.(round(100*n_Red_Epi/nrow(RedDiv_AddEpi_df), 2))*'%'*' Red. & Epi. | '*
+			.(round(100*n_Div_Add/nrow(RedDiv_AddEpi_df), 2))*'%'*' Div. & Add. | '*
+			.(round(100*n_Div_Epi/nrow(RedDiv_AddEpi_df), 2))*'%'*' Div. & Epi.'
+		)
+		
+		plt = density_plot_fn(
+			dataframe = RedDiv_AddEpi_df_no_CG13177, 
+			x_colname = paste("AddEpi_", neg_log10_pval_colname, sep=""), 
+			y_colname = paste("RedDiv_", neg_log10_pval_colname, sep=""),
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = paste("RedDiv_", Sig_Div_colname, sep=""),
+			vline = paste("AddEpi_", Sig_Epi_colname, sep=""),
+			line_name = sprintf("FDR = %s", alpha),
+			linetype = 1,
+			line_color="red",
+			x_log10piecewise = FALSE,
+			y_log10piecewise = FALSE,
+			x_limits=c(-0.4, 6),
+			y_limits=c(-0.2, 4.6)
+			)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_pval_AddEpi_pval_density_no_CG13177", sex)]] = plt
+	}
+	
+	
+	
+	# Generating the RedDiv CoV vs AddEpi Estimate 2D density plot with the FDR line
+	RedDiv_CoV_AddEpi_Est_density_plot_filename = sprintf("%s/%s_RedDiv_CoV_AddEpi_Est_density.pdf", RedDiv_AddEpi_plots_folder, sex)
+	
+	if (sex == "Male"){
+		pdf(RedDiv_CoV_AddEpi_Est_density_plot_filename, width=7, height=7)
+		main=bquote(.(sex)*' Coefficient of Variation vs Epistasis Estimate')
+		subtitle = bquote(
+			.(n_CoV_below_threshold)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_CoV_below_threshold, 2))*'%) where CoV < '*.(CoV_threshold)*' | '*
+			.(n_Add_devation_up)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_Add_deviation_up, 2))*'%) where Dev. from Add. > 0'
+		)
+		xlab=expression('Deviation from Additivity')
+		ylab = "Coefficient of Variation"
+		
+		plt = density_plot_fn(
+			dataframe = RedDiv_AddEpi_df, 
+			x_colname = paste("AddEpi_", piecewise_log_Est_colname, sep=""), 
+			y_colname = paste("RedDiv_", Coef_of_Var_colname, sep=""),
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = 0.2,
+			vline = NA,
+			line_name = sprintf("CoV = %s", CoV_threshold),
+			linetype = 2,
+			line_color="red",
+			x_log10piecewise = TRUE,
+			y_log10piecewise = FALSE,
+			x_limits=c(-3.6, 2.7),
+			y_limits= c(-0.05, 1.5)
+			)
+		
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_CoV_AddEpi_Est_density", sex)]] = plt
+	}
+	
+	
+	
+	if (sex == "Male"){
+		# Generating the RedDiv CoV vs AddEpi Estimate 2D density plot with the FDR line
+		RedDiv_CoV_AddEpi_Est_density_plot_no_CG13177_filename = sprintf("%s/%s_RedDiv_CoV_AddEpi_Est_density_no_CG13177.pdf", RedDiv_AddEpi_plots_folder, sex)
+
+		pdf(RedDiv_CoV_AddEpi_Est_density_plot_no_CG13177_filename, width=7, height=7)
+		main=bquote(.(sex)*' Coefficient of Variation vs Epistasis Estimate')
+		subtitle = bquote(
+			.(n_CoV_below_threshold)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_CoV_below_threshold, 2))*'%) where CoV < '*.(CoV_threshold)*' | '*
+			.(n_Add_devation_up)*'/'*.(nrow(RedDiv_AddEpi_df))*' ('*.(round(percent_Add_deviation_up, 2))*'%) where Dev. from Add. > 0'
+		)
+		xlab=expression('Deviation from Additivity')
+		ylab = "Coefficient of Variation"
+		
+		plt = density_plot_fn(
+			dataframe = RedDiv_AddEpi_df_no_CG13177, 
+			x_colname = paste("AddEpi_", piecewise_log_Est_colname, sep=""), 
+			y_colname = paste("RedDiv_", Coef_of_Var_colname, sep=""),
+			main=main,
+			subtitle=subtitle,
+			xlab=xlab,
+			ylab=ylab,
+			y_to_x_axis_ratio=1,
+			hline = 0.2,
+			vline = NA,
+			line_name = sprintf("CoV = %s", CoV_threshold),
+			linetype = 2,
+			line_color="red",
+			x_log10piecewise = TRUE,
+			y_log10piecewise = FALSE,
+			x_limits=c(-3.6, 2.7),
+			y_limits= c(-0.05, 0.75)
+			)
+		print(plt)
+		dev.off()
+		
+		# Saving the plot
+		global_plt_lst[[sprintf("%s_RedDiv_CoV_AddEpi_Est_density_no_CG13177", sex)]] = plt
+	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+######################################################################
+#####  Post_SAS_figure_panels.R    (sourced by Post_SAS.R)   #########
+######################################################################
+####################################################################################################
+#								ASSEMBLING PLOTS INTO PANELS
+####################################################################################################
+
+panel_folder = "Figure Panels"
+create_folder_fn(panel_folder)
+
+
+
+plt_filename = paste(panel_folder, "Male_RedDiv_AddEpi_panel_no_CG13177", sep="/")
+	temp_theme1 = theme(
+		panel.grid.major = element_blank(), 
+		panel.grid.minor = element_blank(),
+		plot.title = element_blank(),
+		plot.subtitle = element_blank(),
+		axis.text.x = element_text(color = "black", size=4),
+		axis.text.y = element_text(color = "black", size=4),
+		axis.title.x = element_text(size=5),
+		axis.title.y = element_text(size=6),
+		plot.margin=unit(c(0.1,0.01,0.05,0.01), "cm"),
+		legend.text = element_text(size=5),
+		legend.title = element_text(size=6, vjust=2.5),
+		legend.position="bottom",
+		legend.direction="vertical"
+	)
+	
+	temp_theme2 = theme(
+		legend.position="none"
+	)	
+	
+	sub_plt1 = global_plt_lst[["Male_AddEpi_Volc_scatterpie_no_CG13177"]] +
+			temp_theme1 + 
+			guides(
+				fill=guide_legend(title="Transcriptional Niche", keyheight=0.125, keywidth = 0.5, order=1, title.position="top"),
+				linetype=guide_legend(title.position="top", keyheight=0.125)
+			)
+	
+	sub_plt2 = global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_density_no_CG13177"]] + 
+			temp_theme1 + 
+			scale_fill_distiller(
+				palette="Spectral", 
+				direction=-1, 
+				guide=guide_colourbar(
+					title="Density", order=1, barwidth = 0.5, barheight = 2, ticks=FALSE, title.position="top"
+				)
+			) +
+			guides(
+				linetype=guide_legend(title.vjust=2, title.position="top", keyheight=0.5)
+			)
+	
+	sub_plt1a = sub_plt1 + guides(
+		linetype="none"
+		) +
+		theme(legend.box.margin = margin(0,0,0,50))
+
+	sub_plt1b = sub_plt1 + guides( 
+		fill="none"
+		) +
+		theme(legend.justification="left")
+
+	sub_plt2a = sub_plt2 + guides(
+		linetype="none"
+		)
+		
+	sub_plt2b = sub_plt2 + scale_fill_distiller(
+		guide="none"
+		) +
+		theme(legend.justification="left")
+
+	plt_legend1a = get_legend(sub_plt1a)
+	plt_legend1b = get_legend(sub_plt1b)
+	plt_legend2a = get_legend(sub_plt2a)
+	plt_legend2b = get_legend(sub_plt2b)
+	plt_legenda = plot_grid(plt_legend1a, plt_legend2a, nrow=1)
+	plt_legendb = plot_grid(plt_legend1b, plt_legend2b, nrow=2)
+	plt_legend = plot_grid(plt_legenda, plt_legendb, nrow=1)
+	
+	plt = plot_grid(
+		global_plt_lst[["Male_RedDiv_Volc_scatterpie_no_CG13177"]] + temp_theme1 + temp_theme2,
+		sub_plt1 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_scatterpie_no_CG13177"]] + temp_theme1 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_scatterpie_no_CG13177"]] + temp_theme1 + temp_theme2,
+		sub_plt2 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_density_no_CG13177"]] + temp_theme1 + temp_theme2,
+		align = "vh",
+		nrow = 3,
+		rel_widths = c(1, 1),
+		rel_heights = c(1, 1, 1),
+		labels = "AUTO",
+		axis = "tblr",
+		label_fontface = "plain",
+		label_size=7
+	)
+	
+	plt = plot_grid(plt, plt_legend, nrow=2, rel_heights = c(1, 0.15))
+	
+	pdf(paste(plt_filename, "pdf", sep="."), width=3.25, height=5)
+	print(plt)
+	dev.off()
+	png(paste(plt_filename, "png", sep="."), width=3.25, height=5, units = "in", res=300)
+	print(plt)
+	dev.off()
+
+
+plt_filename = paste(panel_folder, "Male_RedDiv_AddEpi_panel", sep="/")
+	temp_theme1 = theme(
+		panel.grid.major = element_blank(), 
+		panel.grid.minor = element_blank(),
+		plot.title = element_blank(),
+		plot.subtitle = element_blank(),
+		# axis.text.x = element_text(color = "black", size=4),
+		# axis.text.y = element_text(color = "black", size=4),
+		# axis.title.x = element_text(size=5),
+		# axis.title.y = element_text(size=6),
+		plot.margin=unit(c(0.5,0.01,0.05,0.01), "cm"),
+		# legend.text = element_text(size=5),
+		legend.title = element_text(size=9),
+		legend.position="bottom",
+		legend.direction="vertical"
+	)
+	
+	temp_theme2 = theme(
+		legend.position="none"
+	)	
+	
+	sub_plt1 = global_plt_lst[["Male_AddEpi_Volc_scatterpie"]] +
+			temp_theme1 + 
+			guides(
+				fill=guide_legend(title="Transcriptional Niche", keyheight=0.85, keywidth = 1, order=1, title.position="top"),
+				linetype=guide_legend(title.position="top", keyheight=0.5)
+			)
+	
+	sub_plt2 = global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_density"]] + 
+			temp_theme1 + 
+			scale_fill_distiller(
+				palette="Spectral", 
+				direction=-1, 
+				guide=guide_colourbar(
+					title="Density", order=1, barwidth = 1, barheight = 4, ticks=FALSE, title.position="top"
+				)
+			) +
+			guides(
+				linetype=guide_legend(title.vjust=2, title.position="top", keyheight=0.5)
+			)
+	
+	sub_plt1a = sub_plt1 + guides(
+		linetype="none"
+		) +
+		theme(legend.box.margin = margin(0,0,0,50))
+
+	sub_plt1b = sub_plt1 + guides( 
+		fill="none"
+		) +
+		theme(legend.justification="left")
+
+	sub_plt2a = sub_plt2 + guides(
+		linetype="none"
+		)
+		
+	sub_plt2b = sub_plt2 + scale_fill_distiller(
+		guide="none"
+		) +
+		theme(legend.justification="left")
+
+	plt_legend1a = get_legend(sub_plt1a)
+	plt_legend1b = get_legend(sub_plt1b)
+	plt_legend2a = get_legend(sub_plt2a)
+	plt_legend2b = get_legend(sub_plt2b)
+	plt_legenda = plot_grid(plt_legend1a, plt_legend2a, nrow=1)
+	plt_legendb = plot_grid(plt_legend1b, plt_legend2b, nrow=2)
+	plt_legend = plot_grid(plt_legenda, plt_legendb, nrow=1)
+	
+	plt = plot_grid(
+		global_plt_lst[["Male_RedDiv_Volc_scatterpie"]] + temp_theme1 + temp_theme2,
+		sub_plt1 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_scatterpie"]] + temp_theme1 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_scatterpie"]] + temp_theme1 + temp_theme2,
+		sub_plt2 + temp_theme2,
+		global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_density"]] + temp_theme1 + temp_theme2,
+		align = "vh",
+		nrow = 3,
+		rel_widths = c(1, 1),
+		rel_heights = c(1, 1, 1),
+		labels = "AUTO",
+		axis = "tblr",
+		label_fontface = "plain",
+		label_size=14
+	)
+	
+	plt = plot_grid(plt, plt_legend, nrow=2, rel_heights = c(1, 0.15))
+	
+	pdf(paste(plt_filename, "pdf", sep="."), width=6.75, height=9.25)
+	print(plt)
+	dev.off()
+	png(paste(plt_filename, "png", sep="."), width=6.75, height=9.25, units = "in", res=300)
+	print(plt)
+	dev.off()
+
+
+
+# Individual RedDiv_AddEpi plots to assemble in Adobe Illustrator
+RedDiv_AddEpi_panel_folder = "RedDiv AddEpi Plots"
+create_folder_fn(RedDiv_AddEpi_panel_folder)
+
+RedDiv_AddEpi_plt_names = c(
+"Male_RedDiv_Volc_scatterpie_no_CG13177",
+"Male_AddEpi_Volc_scatterpie_no_CG13177",
+"Male_RedDiv_CoV_AddEpi_Est_scatterpie_no_CG13177",
+"Male_RedDiv_pval_AddEpi_pval_scatterpie_no_CG13177",
+"Male_RedDiv_CoV_AddEpi_Est_density_no_CG13177",
+"Male_RedDiv_pval_AddEpi_pval_density_no_CG13177"
+)
+
+temp_theme = theme(
+	legend.position="none",
+	panel.grid.major = element_blank(), 
+	panel.grid.minor = element_blank(),
+	plot.subtitle = element_blank(),
+	plot.margin=unit(c(0.03,0,0.01,0.01), "cm"),
+	plot.title = element_blank(),
+	axis.title = element_blank(),
+	axis.text.x = element_text(color = "black", size=5),
+	axis.text.y = element_text(color = "black", size=5)
+)
+
+for (plt_name in RedDiv_AddEpi_plt_names){
+	plt = global_plt_lst[[plt_name]] + temp_theme
+	pdf(paste(RedDiv_AddEpi_panel_folder, paste(plt_name, "pdf", sep="."), sep="/"), width=1.5, height=1.5)
+	print(plt)
+	dev.off()
+}
+
+
+
+# Plot from which to grab the legend
+plt_filename = paste(panel_folder, "Male_RedDiv_AddEpi_panel_no_CG13177", sep="/")
+	plt = global_plt_lst[["Male_RedDiv_Volc_scatterpie_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + theme(legend.position="none") +
+	global_plt_lst[["Male_AddEpi_Volc_scatterpie_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + 
+	global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_scatterpie_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + theme(legend.position="none") +
+	global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_scatterpie_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + theme(legend.position="none") +
+	global_plt_lst[["Male_RedDiv_CoV_AddEpi_Est_density_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + 
+	global_plt_lst[["Male_RedDiv_pval_AddEpi_pval_density_no_CG13177"]] + ggtitle(NULL, subtitle=NULL) + theme(legend.position="none") +
+	plot_layout(ncol = 2, byrow = TRUE, guides = 'collect') +
+	plot_annotation(tag_levels = 'A')
+	pdf(paste(RedDiv_AddEpi_panel_folder, "RedDiv_AddEpi_legend_plot.pdf", sep="/"), width=6.75, height=9.25)
+	print(plt)
+	dev.off()
+
+
+
+plt_filename = paste(panel_folder, "Female_RedDiv_AddEpi_panel", sep="/")
+	temp_theme1 = theme(
+		panel.grid.major = element_blank(), 
+		panel.grid.minor = element_blank(),
+		plot.title = element_blank(),
+		plot.subtitle = element_blank(),
+		# axis.text.x = element_text(color = "black", size=4),
+		# axis.text.y = element_text(color = "black", size=4),
+		# axis.title.x = element_text(size=5),
+		# axis.title.y = element_text(size=6),
+		plot.margin=unit(c(0.5,0.5,0.5,0.5), "cm"),
+		# legend.text = element_text(size=5),
+		legend.title = element_text(size=9),
+		legend.position="bottom",
+		legend.direction="vertical"
+	)
+	
+	temp_theme2 = theme(
+		legend.position="none"
+	)	
+	
+	sub_plt1 = global_plt_lst[["Female_AddEpi_Volc_scatterpie"]] +
+			temp_theme1 + 
+			guides(
+				fill=guide_legend(title="Transcriptional Niche", keyheight=0.85, keywidth = 1, order=1, title.position="top"),
+				linetype=guide_legend(title.position="top", keyheight=0.5)
+			)
+	
+	sub_plt1a = sub_plt1 + guides(
+		linetype="none"
+		) +
+		theme(legend.box.margin = margin(0,0,0,50))
+
+	sub_plt1b = sub_plt1 + guides( 
+		fill="none"
+		) +
+		theme(legend.justification="left")
+
+	plt_legend1a = get_legend(sub_plt1a)
+	plt_legend1b = get_legend(sub_plt1b)
+	plt_legend = plot_grid(plt_legend1a, plt_legend1b, nrow=1)
+	
+	plt = plot_grid(
+		global_plt_lst[["Female_RedDiv_Volc_scatterpie"]] + temp_theme1 + temp_theme2,
+		sub_plt1 + temp_theme2,
+		global_plt_lst[["Female_RedDiv_CoV_AddEpi_Est_scatterpie"]] + temp_theme1 + temp_theme2,
+		global_plt_lst[["Female_RedDiv_pval_AddEpi_pval_scatterpie"]] + temp_theme1 + temp_theme2,
+		align = "vh",
+		nrow = 2,
+		rel_widths = c(1, 1),
+		rel_heights = c(1, 1),
+		labels = "AUTO",
+		axis = "tblr",
+		label_fontface = "plain",
+		label_size=14
+	)
+	
+	plt = plot_grid(plt, plt_legend, nrow=2, rel_heights = c(1, 0.15))
+	
+	pdf(paste(plt_filename, "pdf", sep="."), width=6.75, height=9.25)
+	print(plt)
+	dev.off()
+	png(paste(plt_filename, "png", sep="."), width=6.75, height=6.75, units = "in", res=300)
+	print(plt)
+	dev.off()
+
+plt_filename = paste(panel_folder, "Full_Model ANOVA_panel", sep="/")
+temp_theme = theme(legend.position="none", plot.title = element_text(size = 11), axis.title.x = element_text(size=9))
+plt = global_plt_lst[["Sex_MD"]] + ggtitle("Sex", subtitle=NULL) + temp_theme +
+global_plt_lst[["Genotype_MD"]] + ggtitle("Genotype", subtitle=NULL) + temp_theme +           
+global_plt_lst[["Sex_Genotype_MD"]] + ggtitle("Sex*Genotype", subtitle=NULL) + temp_theme +
+plot_layout(ncol = 1, byrow = TRUE) +
+plot_annotation(tag_levels = 'A')
+pdf(paste(plt_filename, "pdf", sep="."), width=3.25, height=5.75)
+print(plt)
+dev.off()
+png(paste(plt_filename, "png", sep="."), width=3.25, height=5.75, units = "in", res=300)
+print(plt)
+dev.off()
+
+
+# Individual plots to assemble in Adobe Illustrator
+Supp_MD_panel_folder = "Supplementary MD Plots"
+create_folder_fn(Supp_MD_panel_folder)
+
+Supp_MD_plt_names = c(
+"Sex_MD",
+"Genotype_MD",
+"Sex_Genotype_MD"
+)
+
+temp_theme = theme(
+	legend.position="none",
+	panel.grid.major = element_blank(), 
+	panel.grid.minor = element_blank(),
+	plot.subtitle = element_blank(),
+	plot.margin=unit(c(0.075,0.05,0.05,0.05), "cm"),
+	plot.title = element_blank(),
+	axis.title = element_blank(),
+	axis.text.x = element_text(color = "black", size=6),
+	axis.text.y = element_text(color = "black", size=6)
+)
+
+for (plt_name in Supp_MD_plt_names){
+	plt = global_plt_lst[[plt_name]] + temp_theme
+	pdf(paste(Supp_MD_panel_folder, paste(plt_name, "pdf", sep="."), sep="/"), width=2, height=1)
+	print(plt)
+	dev.off()
+}
+
+# Individual plots to assemble in Adobe Illustrator
+Tniche_Volc_panel_folder = "Tniche Volc Plots"
+create_folder_fn(Tniche_Volc_panel_folder)
+
+Tniche_Volc_plt_names = c(
+"Female.Obp50a - Female.Obp50Neg_Volc",
+"Female.Obp50b - Female.Obp50Neg_Volc",
+"Female.Obp50c - Female.Obp50Neg_Volc",
+"Female.Obp50d - Female.Obp50Neg_Volc",
+"Female.Obp50Pos - Female.Obp50Neg_Volc",
+"Male.Obp50a - Male.Obp50Neg_Volc",
+"Male.Obp50b - Male.Obp50Neg_Volc",
+"Male.Obp50c - Male.Obp50Neg_Volc",
+"Male.Obp50d - Male.Obp50Neg_Volc",
+"Male.Obp50Pos - Male.Obp50Neg_Volc"
+)
+
+temp_theme = theme(
+	legend.position="none",
+	panel.grid.major = element_blank(), 
+	panel.grid.minor = element_blank(),
+	plot.subtitle = element_blank(),
+	plot.margin=unit(c(0.075,0.05,0.05,0.05), "cm"),
+	plot.title = element_blank(),
+	axis.title = element_blank(),
+	axis.text.x = element_text(color = "black", size=4),
+	axis.text.y = element_text(color = "black", size=4)
+)
+
+for (plt_name in Tniche_Volc_plt_names){
+	plt = global_plt_lst[[plt_name]] + temp_theme
+	pdf(paste(Tniche_Volc_panel_folder, paste(plt_name, "pdf", sep="."), sep="/"), width=1.5, height=0.75)
+	print(plt)
+	dev.off()
+}
+
+
+
+plt_filename = paste(panel_folder, "Obp50bCD_effects_Volc_panel", sep="/")
+temp_theme = theme(legend.position="none")
+F_b_Neg_title = bquote("Female "*.(genotype_label_lst[["Obp50b"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+F_NegBCD_Neg_title = bquote("Female "*.(genotype_label_lst[["Obp50NegBCD"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+F_b_NegBCD_title = bquote("Female "*.(genotype_label_lst[["Obp50b"]])*"  -  "*.(genotype_label_lst[["Obp50NegBCD"]]))
+M_b_Neg_title = bquote("Male "*.(genotype_label_lst[["Obp50b"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+M_NegBCD_Neg_title = bquote("Male "*.(genotype_label_lst[["Obp50NegBCD"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+M_b_NegBCD_title = bquote("Male "*.(genotype_label_lst[["Obp50b"]])*"  -  "*.(genotype_label_lst[["Obp50NegBCD"]]))
+plt = global_plt_lst[["Female.Obp50b - Female.Obp50Neg_Volc"]] + ggtitle(F_b_Neg_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Female.Obp50NegBCD - Female.Obp50Neg_Volc"]] + ggtitle(F_NegBCD_Neg_title, subtitle=NULL) + temp_theme +           
+global_plt_lst[["Female.Obp50b - Female.Obp50NegBCD_Volc"]] + ggtitle(F_b_NegBCD_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Male.Obp50b - Male.Obp50Neg_Volc"]] + ggtitle(M_b_Neg_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Male.Obp50NegBCD - Male.Obp50Neg_Volc"]] + ggtitle(M_NegBCD_Neg_title, subtitle=NULL) + temp_theme +           
+global_plt_lst[["Male.Obp50b - Male.Obp50NegBCD_Volc"]] + ggtitle(M_b_NegBCD_title, subtitle=NULL) + temp_theme +
+plot_layout(ncol = 2, byrow = FALSE) +
+plot_annotation(tag_levels = 'A')
+pdf(paste(plt_filename, "pdf", sep="."), width=6.75, height=5.75)
+print(plt)
+dev.off()
+png(paste(plt_filename, "png", sep="."), width=6.75, height=5.75, units = "in", res=300)
+print(plt)
+dev.off()
+
+
+
+plt_filename = paste(panel_folder, "Obp50bCD_effects_on_Obp50c_Volc_panel", sep="/")
+temp_theme = theme(legend.position="none")
+F_c_Neg_title = bquote("Female "*.(genotype_label_lst[["Obp50c"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+F_cBCD_NegBCD_title = bquote("Female "*.(genotype_label_lst[["Obp50cBCD"]])*"  -  "*.(genotype_label_lst[["Obp50NegBCD"]]))
+F_cBCD_c_title = bquote("Female "*.(genotype_label_lst[["Obp50cBCD"]])*"  -  "*.(genotype_label_lst[["Obp50c"]]))
+M_c_Neg_title = bquote("Male "*.(genotype_label_lst[["Obp50c"]])*"  -  "*.(genotype_label_lst[["Obp50Neg"]]))
+M_cBCD_NegBCD_title = bquote("Male "*.(genotype_label_lst[["Obp50cBCD"]])*"  -  "*.(genotype_label_lst[["Obp50NegBCD"]]))
+M_cBCD_c_title = bquote("Male "*.(genotype_label_lst[["Obp50cBCD"]])*"  -  "*.(genotype_label_lst[["Obp50c"]]))
+plt = global_plt_lst[["Female.Obp50c - Female.Obp50Neg_Volc"]] + ggtitle(F_c_Neg_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Female.Obp50cBCD - Female.Obp50NegBCD_Volc"]] + ggtitle(F_cBCD_NegBCD_title, subtitle=NULL) + temp_theme +           
+global_plt_lst[["Female.Obp50cBCD - Female.Obp50c_Volc"]] + ggtitle(F_cBCD_c_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Male.Obp50c - Male.Obp50Neg_Volc"]] + ggtitle(M_c_Neg_title, subtitle=NULL) + temp_theme +
+global_plt_lst[["Male.Obp50cBCD - Male.Obp50NegBCD_Volc"]] + ggtitle(M_cBCD_NegBCD_title, subtitle=NULL) + temp_theme +           
+global_plt_lst[["Male.Obp50cBCD - Male.Obp50c_Volc"]] + ggtitle(M_cBCD_c_title, subtitle=NULL) + temp_theme +
+plot_layout(ncol = 2, byrow = FALSE) +
+plot_annotation(tag_levels = 'A')
+pdf(paste(plt_filename, "pdf", sep="."), width=6.75, height=5.75)
+print(plt)
+dev.off()
+png(paste(plt_filename, "png", sep="."), width=6.75, height=5.75, units = "in", res=300)
+print(plt)
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###############################################################################################################
+#####        WGCNA_networks.R    (sourced by Post_SAS.R, and requires an active Cytoscape session)    #########
+###############################################################################################################
+#############################################################################################
+#								PACKAGE IMPORTS
+#############################################################################################
+
+library(readr)
+# library(org.Dm.eg.db)
+# library(edgeR) #already imported by Post_SAS.R
+library(WGCNA)
+options(stringsAsFactors = FALSE)
+
+library(RCy3)
+cytoscapePing() #making sure there's a valid connection to Cytoscape.
+cytoscapeVersionInfo()
+deleteAllNetworks() #Delete all networks in current session
+
+
+
+#############################################################################################
+#								FUNCTION DEFINITIONS
+#############################################################################################
+
+# Function similar to the built-in readline() function, but works when run as a SINGLE line
+# function call in an interactive environment OR when sourced.
+# To get R to wait for the user's input before executing subsequent lines when MULTIPLE lines 
+# are run (i.e. by copying and pasting code into R that includes a call to robust_readlines() 
+# and at least one other line), that whole code chunk must be wrapped in curly brackets {}.
+# For instance, it is safe to use robust_readline() within a function whose body is wrapped
+# in curly brackets {}.
+robust_readline = function(user_prompt){
+	if (interactive()){
+		return_val = readline(user_prompt)
+	} else {
+		cat(user_prompt)
+		return_val = readLines("stdin", n=1)
+	}
+	return(return_val)
+}
+
+
+
+# Function to attempt a function call multiple times if unsuccessful. Sometimes necessary for
+# communication between R and Cytoscape (until a better workaround is found).
+if_at_first_you_dont_succeed = function(fun, arg_lst, pause=5, attempts=10, x=1){
+	sink(file("messages.Rout", open = "wt"), type="message") #Divert messages to a file instead of the console
+	
+	cat("Attempt number:", x, "\n")
+	
+	tryCatch(
+		do.call(fun, arg_lst),
+		error = function(e){
+			Sys.sleep(pause)
+			x = x + 1
+			if (x > attempts){print("Last attempt unsuccessful. Returning."); return()}
+			if_at_first_you_dont_succeed(fun, arg_lst, pause, attempts, x)
+		}
+	)
+	
+	sink(type="message") #Redirect messages to console again
+}
+
+
+# Function to export a Cytoscape network to a .pdf
+Network_to_pdf_fn = function(filename, network_name=NULL){
+if(file.exists(filename)){
+Response = file.remove(filename)} #cytoscape hangs waiting for user response if file already exists; must therefore remove it first
+exportImage(filename, type = "pdf", network=network_name)
+}
+
+
+
+
+# Function to initialize a WGCNA network
+# If no chosen_power is provided, then user input is required to choose it based on a scale-
+# free topology plot.
+WGCNA_init_fn = function(
+norm_counts_mat, 
+norm_counts_row_names, 
+norm_counts_col_names,
+GOI_vec, #The vector of gene names which are of interest
+altNodeNames=norm_counts_row_names, #If the node names should differ from the norm_counts_row_names, specify them here
+chosen_power=NULL,
+corType = "bicor",
+SFT_plt_filename = "scale_free_topology.pdf",
+load_TOM=TRUE,
+TOM_filename="TOM.RData",
+threshold=0.15,
+generate_SFT_plt = TRUE
+){
+    
+    # Transposing and converting to dataframe
+    datExpr = as.data.frame(t(norm_counts_mat))
+    names(datExpr) = norm_counts_row_names
+    rownames(datExpr) = norm_counts_col_names
+    
+	SFT_plt_lst = list()
+	if (generate_SFT_plt | is.null(chosen_power)){
+		
+		# Generating a set of candidate soft-thresholding powers
+		# Note that WGCNA does not support powers > 30.
+		powers = c(c(1:10), seq(from = 12, to=30, by=2))
+		
+		# Calling the network topology analysis function
+		sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5)
+		
+		# Setting the graphical parameters
+		par(mar = c(5.1, 4.6, 4.1, 2.1), cex = 0.6)
+		
+		# Plotting the scale-free topology fit index as a function of the soft-thresholding power
+		plot(
+			sft$fitIndices[,1], 
+			-sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+			xlab="Soft Threshold Power",
+			ylab=expression("Scale Free Topology Model Fit, signed R"^2),
+			type="n",
+			main=paste("Scale independence")
+		)
+		text(
+			sft$fitIndices[,1], 
+			-sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+			labels=powers,
+			cex=0.9,
+			col="#ED1C24"
+		)
+		
+		#Saving the plot
+		SFT_plt_lst[["Model_fit"]] = recordPlot()
+		
+		# Plotting the mean connectivity as a function of the soft-thresholding power
+		plot(
+			sft$fitIndices[,1], 
+			sft$fitIndices[,5],
+			xlab="Soft Threshold Power",
+			ylab="Mean Connectivity", 
+			type="n",
+			main=paste("Mean connectivity")
+		)
+		text(
+			sft$fitIndices[,1], 
+			sft$fitIndices[,5], 
+			labels=powers, 
+			cex=0.9,
+			col="#ED1C24"
+		)
+		
+		#Saving the plot
+		SFT_plt_lst[["Mean_connectivity"]] = recordPlot()
+		
+		# Exporting the scale_free_topology plots
+		pdf(paste(SFT_plt_filename, "_Model_fit", ".pdf", sep=""), width=3.25, height=3.25)
+		replayPlot(SFT_plt_lst[["Model_fit"]])
+		dev.off()
+		print(sprintf("Saved Model Fit plot to %s", SFT_plt_filename))
+		
+		pdf(paste(SFT_plt_filename, "_Mean_connectivity", ".pdf", sep=""), width=3.25, height=3.25)
+		replayPlot(SFT_plt_lst[["Mean_connectivity"]])
+		dev.off()
+		print(sprintf("Saved Mean Connectivity plot to %s", SFT_plt_filename))
+		
+		# Restoring the graphical parameters
+		par(mar = c(5.1, 4.1, 4.1, 2.1), cex = 1)
+		
+		# Allowing the user to choose a soft thresholding power, if necessary
+		if (is.null(chosen_power)){
+			chosen_power = robust_readline("Based on the displayed plots, what \nsoft-thresholding power is desired?")
+			chosen_power = as.numeric(chosen_power)
+		}
+		
+		# Printing the chosen soft thresholding power
+		print(sprintf("Chosen soft-thresholding power: %s", chosen_power))
+		
+	}
+    
+	# Strongly suggested in the WGCNA FAQ document
+	if (corType=="bicor"){
+		maxPOutliers=0.1
+	} else {
+		maxPOutliers=1
+	}
+	
+    # Recalculate topological overlap if needed
+    if (file.exists(TOM_filename) & load_TOM){
+        print(sprintf("Loading TOM from %s", TOM_filename))
+        load(TOM_filename)
+        print("Finished loading TOM")
+    } else {
+		user_prompt = sprintf("\nThe TOM file \n\t%s\ncould not be found.", TOM_filename)
+		user_prompt = paste(user_prompt, "Are you sure you want to calculate a new TOM?", sep="\n")
+		user_prompt = paste(user_prompt, "If so, hit <Enter>. If not, hit <Esc>.", sep="\n")
+		a = robust_readline(user_prompt)
+        print("Calculating TOM")
+        TOM = TOMsimilarityFromExpr(datExpr, power=chosen_power, corType=corType, maxPOutliers=maxPOutliers)
+        save(TOM, file=TOM_filename)
+        print("Finished calculating TOM")
+		print(sprintf("Saved TOM to %s", TOM_filename))
+    }
+    
+	# Filtering to only include the genes of interest
+	sel_vec = norm_counts_row_names %in% GOI_vec #Returns a logical vector indicating whether the gene is of interest
+	norm_counts_row_names_sub = norm_counts_row_names[sel_vec]
+	altNodeNames_sub = altNodeNames[sel_vec]
+	TOM_sub = as.matrix(TOM[sel_vec, sel_vec])
+	dimnames(TOM_sub) = list(norm_counts_row_names_sub, norm_counts_row_names_sub)
+	datExpr_sub = datExpr[,sel_vec]
+	
+	# Export the network into edge and node list files Cytoscape can read
+	cyt = exportNetworkToCytoscape(
+	TOM_sub,
+	threshold=threshold,
+	nodeNames=norm_counts_row_names_sub,
+	altNodeNames=altNodeNames_sub)
+	
+	# Defining the node table
+	node_table = cyt[["nodeData"]]
+	node_table[["nodeAttr[nodesPresent, ]"]] = NULL #Getting rid of the empty column
+	
+	if (nrow(node_table) < 10){
+		message(sprintf("Warning: %s nodes in network. The threshold is likely too high.", nrow(node_table)))
+	}
+	
+	# Defining the edge table
+	edge_table = cyt[["edgeData"]]
+	
+    return(
+		list(
+			"datExpr"=datExpr,
+			"datExpr_sub"=datExpr_sub,
+			"SFT_plt_lst"=SFT_plt_lst,
+			"TOM"=TOM,
+			"chosen_power"=chosen_power,
+			"node_table"=node_table, 
+			"edge_table"=edge_table
+		)
+	)
+}
+
+
+
+# Function to export a WGCNA network to Cytoscape
+WGCNA_to_cytoscape_fn = function(
+edge_table,
+node_table,
+edge_table_source_col_name="fromAltName",
+edge_table_target_col_name="toAltName",
+edge_table_filename=NULL, #Must include full path for Cytoscape
+node_table_filename=NULL #Must include full path for Cytoscape
+){
+	
+	# Setting the default edge_table_filename
+	if (is.null(edge_table_filename)){
+		edge_table_filename=paste(getwd(), "edge_table.txt", sep="/")
+	}
+	
+	# Setting the default node_table_filename
+	if (is.null(node_table_filename)){
+		node_table_filename=paste(getwd(), "node_table.txt", sep="/")
+	}
+	
+	# Exporting the node and edge tables
+	write.table(edge_table, edge_table_filename, sep="\t", row.names = FALSE, quote=FALSE)
+	write.table(node_table, node_table_filename, sep="\t", row.names = FALSE, quote=FALSE)
+	
+	# Setting which edge table columns will be the source and target columns for the network
+	source_col = match(edge_table_source_col_name, colnames(edge_table))
+	target_col = match(edge_table_target_col_name, colnames(edge_table))
+	
+	# Divert messages to a file instead of the console
+	sink(file("messages.Rout", open = "wt"), type="message") 
+	
+	# Import the edge table into Cytoscape to initialize the network
+	tryCatch(
+		commandsPOST(
+			paste(
+				'network import file file=', edge_table_filename, 
+				' firstRowAsColumnNames=true',
+				' startLoadRow=1',
+				' indexColumnSourceInteraction=', source_col,
+				' indexColumnTargetInteraction=', target_col,
+				sep=''
+			)
+		),
+		
+		# If the network is large, Cytoscape waits for user confirmation to continue, causing 
+		# subsequent errors. Creating a network view is a workaround.
+		error = function(e){
+			commandsPOST(sprintf('view create network="%s"', edge_table_filename))
+		}
+	)
+	
+	# Redirect messages to console again
+	sink(type="message") 
+	
+	# If Cytoscape isn't finished loading the initial network from edge_table, it will reject R's
+	# attempt to load node_table. Finite, periodic attempts to load the node table is a workaround.
+	if_at_first_you_dont_succeed(loadTableData, list(node_table, data.key.column = "altName", table = "node", table.key.column = "name"))	
+}
+
+
+
+network_aesthetics_fn = function(
+	genotypes,
+	Dir,
+	edge_table, 
+	genotype_col_lst, #list([genotypeA]=[hex color], [genotypeB]=[hex color], ...)
+	edge_col_vec, #c([down hex color], [up hex color])
+	node_bord_col_vec, #c([up & down hex color], [up hex color], [down hex color])
+	node_table=NULL){
+	
+	if (!all(genotypes %in% names(genotype_col_lst))){
+		stop("Not all genotypes are in names(genotype_col_lst).")
+	}
+	
+	# Only the colors of the Genotypes involved in the network are needed.
+	genotype_col_lst = genotype_col_lst[genotypes]
+	
+	if (length(genotype_col_lst) == 1){
+		
+		# A workaround to enable a pie chart to be constructed for a single genotype;
+		# the Dummy color will not actually be used.
+		genotype_col_lst[["Dummy"]] = "#000000"
+		node_table[["Dummy_sig"]] = 0
+		
+		# If Cytoscape isn't finished loading the initial network from edge_table, it will reject R's
+		# attempt to load node_table. Finite, periodic attempts to load the node table is a workaround.
+		if_at_first_you_dont_succeed(loadTableData, list(node_table, data.key.column = "altName", table = "node", table.key.column = "name"))
+	}
+
+	setNodeFillOpacityDefault(0) #Making the Node fills transparent
+	setNodeFontSizeDefault(20) #was 6 
+	setNodeBorderWidthDefault(0)
+	setNodeShapeDefault("ELLIPSE")
+	setNodeWidthDefault(40) #was 20 
+	setNodeHeightDefault(40) #was 20 
+	
+	setNodeCustomPieChart(columns=paste(names(genotype_col_lst), "_Tniche", sep=""), colors=as.character(genotype_col_lst), slot=1)
+	
+	setEdgeLineWidthMapping('cor_coef_mag', range(edge_table[["cor_coef_mag"]]), c(0.1, 2))
+	setEdgeColorMapping("cor_coef_dir", table.column.values=c(0, 1), colors=edge_col_vec, mapping.type="d")
+	setNodeFontFaceMapping("bold_node_label", table.column.values=c(0, 1), fonts=c("Arial Italic,plain,20", "Arial Bold Italic,plain,20"))
+
+	# For "Directionless" networks
+	# if (!is.null(Tniche_lst_up)){
+	if (Dir=="Directionless"){
+		setNodeBorderWidthDefault(5)
+		setNodeBorderColorMapping("perc_sig_up", table.column.values=c(0, 1), 
+			colors=node_bord_col_vec[2:length(node_bord_col_vec)], mapping.type="d", default.color=node_bord_col_vec[1])
+	}
+}
+
+
+
+General_network_fn = function(
+Master_Tniche_lst,
+Sex, 
+Dir,
+genotypes_1, #Genotypes that will contribute to the node set, node pie chart, and samples used in constructing the network
+col_info_df, #full, not subsetted
+row_info_df, #full, not subsetted
+norm_counts_mat, #full, not subsetted
+genotypes_2=NULL, #Genotypes that will contribute only to the node pie chart
+genotypes_3=NULL, #Genotypes that will contribute only to the samples used in constructing the network
+chosen_power=NULL,
+corType="bicor",
+load_TOM=FALSE,
+threshold=0.15,
+edge_table_filename=NULL, #Must include full path for Cytoscape
+node_table_filename=NULL, #Must include full path for Cytoscape
+add_generic_aesthetics=TRUE,
+genotype_col_lst=NULL, #Must be specified if add_generic_aesthetics is TRUE
+edge_col_vec=NULL, #Must be specified if add_generic_aesthetics is TRUE
+node_bord_col_vec=NULL, #Must be specified if add_generic_aesthetics is TRUE
+cytoscape_session_filename="WGCNA_net.cys",
+network_image_filename="WGCNA_net.pdf",
+generate_SFT_plt=TRUE,
+TOM_filename="TOM.RData",
+SFT_plt_filename="SFT_plt.pdf"
+){
+	
+	# Defining the genotypes that will be used to construct the node pie charts
+	pie_genotypes = union(genotypes_1, genotypes_2)
+	
+	# Defining the genotypes that will be used to construct the WGCNA network
+	sample_genotypes = union(genotypes_1, genotypes_3)
+	
+	# Defining the results folder and subfolders
+	results_folder = "WGCNA Network Results"
+	SFT_plt_folder = paste(results_folder, "SFT Plots", sep="/")
+	TOM_folder = paste(results_folder, "TOMs", sep="/")
+	
+	# Defining the TNdfL (Transcriptional Niche dataframe List) and Tniche_lst
+	TNdfL = Master_Tniche_lst[[Sex]][[Dir]][pie_genotypes]
+	Tniche_lst = list()
+	for (genotype in pie_genotypes){
+		Tniche_lst[[genotype]] = TNdfL[[genotype]][["FlyBase_ID"]]
+	}
+	
+	# For "Directionless" networks which contain both up- and down-regulated genes there should be
+	# a visual property to indicate which nodes are up- and/or down-regulated (it's possible to
+	# be both since a given gene can be up-regulated in one transcriptional niche and down-
+	# regulated in another).
+	if (Dir=="Directionless"){
+		TNdfL_up = Master_Tniche_lst[[Sex]][["Up"]]
+		Tniche_lst_up = list()
+		for (genotype in names(TNdfL_up)){
+			Tniche_lst_up[[genotype]] = TNdfL_up[[genotype]][["FlyBase_ID"]]
+		}
+	} else {
+		Tniche_lst_up=NULL
+	}
+	
+	# Defining the vector will all FlyBase_ID's of all candidate nodes in the network (in all genotypes_1 Tniches)
+	node_FBID_vec = c()
+	for (FBID_vec in Tniche_lst[genotypes_1]){
+		node_FBID_vec = union(node_FBID_vec, FBID_vec)
+	}
+	
+	# Creating subsets of norm_counts_mat, row_info_df, and col_info_df that only contain the pertinent
+	# genes and samples for the WGCNA network. Note that norm_counts_mat_sub still contains all genes (See WGCNA FAQ doc item #2).
+	norm_counts_mat_sub = norm_counts_mat[, col_info_df[["Sex"]] == Sex & col_info_df[["Genotype"]] %in% sample_genotypes]
+	col_info_df_sub = col_info_df[col_info_df[["Sex"]] == Sex & col_info_df[["Genotype"]] %in% sample_genotypes,]
+	abbr_sample_names = gsub("_L001_sorted.bam", "", rownames(col_info_df_sub))
+	norm_counts_col_names = paste(
+		col_info_df_sub[["Sex"]], col_info_df_sub[["Genotype"]], col_info_df_sub[["Line"]], abbr_sample_names, sep="."
+	)
+	
+	# Generating the node and edge tables
+	init_lst = WGCNA_init_fn(
+		norm_counts_mat_sub, 
+		row_info_df[["FlyBase_ID"]], 
+		norm_counts_col_names,
+		GOI_vec=node_FBID_vec,
+		altNodeNames=row_info_df[["Gene_symbol"]],
+		chosen_power=chosen_power,
+		corType = corType,
+		SFT_plt_filename=SFT_plt_filename,
+		load_TOM=load_TOM,
+		TOM_filename=TOM_filename,
+		threshold=threshold,
+		generate_SFT_plt = generate_SFT_plt
+	)
+	
+	node_table = init_lst[["node_table"]]
+	edge_table = init_lst[["edge_table"]]
+	
+	# Adding a node_table column for each Genotype which indicates whether the gene is part of
+	# the respective Genotype's transcriptional niche (1) or not (0)
+	for (genotype in pie_genotypes){
+		node_table[[paste(genotype,"_Tniche", sep="")]] = as.numeric(node_table[["nodeName"]] %in% Tniche_lst[[genotype]])
+	}
+	
+	# For "Directionless" networks, a perc_sig_up column is added to the node table so that a mapping
+	# to the node border's color can be made that indicates whether the gene is up- or down-regulated
+	# in the transcriptional niches in which that gene is significant. If there is disagreement between
+	# the different niches (e.g. one niche is up and the other is down), then a third border color is used.
+	if (Dir=="Directionless"){
+		for (genotype in pie_genotypes){
+			node_table[[paste(genotype,"_up",sep="")]] = as.numeric(node_table[["nodeName"]] %in% Tniche_lst_up[[genotype]])
+		}
+		
+		node_table[["perc_sig_up"]] = apply(
+			node_table, 1, function(x){
+				paralog_cols = x[paste(pie_genotypes, "_Tniche",sep="")]
+				up_cols = x[paste(pie_genotypes, "_up", sep="")]
+				sig_up_cols = up_cols[as.logical(as.numeric(paralog_cols))]
+				return (mean(as.numeric(sig_up_cols)))
+			}
+		)
+	}
+	
+	# Adding a bold_node_label column to node_table to determine which node labels should be bolded,
+	# based on the number of edges they have.
+	node_table[["n_edges"]] = 0
+	for (i in 1:nrow(node_table)){
+		node = node_table[i,"nodeName"]
+		sel_vec = edge_table[["fromNode"]] == node | edge_table[["toNode"]] == node
+		temp_edge_table = edge_table[sel_vec,]
+		n_edges = nrow(temp_edge_table)
+		node_table[i,"n_edges"] = n_edges
+	}
+	
+	n_edge_threshold = quantile(node_table[["n_edges"]], 0.9)
+	node_table[["bold_node_label"]] = 0
+	for (i in 1:nrow(node_table)){
+		if(node_table[i,"n_edges"] > n_edge_threshold){
+			node_table[i,"bold_node_label"] = 1
+		}
+	}
+	
+	# Adding correlation coefficients to the edge table
+	datExpr_sub = init_lst[["datExpr_sub"]]
+	cor_mat = cor(datExpr_sub)
+	cor_cyt = exportNetworkToCytoscape(cor_mat, threshold=-Inf)
+	cor_edge_table = cor_cyt[["edgeData"]]
+	cor_edge_table[["cor_coef_mag"]] = abs(cor_edge_table[["weight"]])
+	cor_edge_table[["cor_coef_dir"]] = as.numeric(cor_edge_table[["weight"]] > 0)
+	cor_edge_table[["merge_by"]] = paste(cor_edge_table[["fromNode"]], cor_edge_table[["toNode"]])
+	cor_edge_table = cor_edge_table[,c("merge_by", "cor_coef_mag", "cor_coef_dir")]
+	edge_table[["merge_by"]] = paste(edge_table[["fromNode"]], edge_table[["toNode"]])
+	edge_table = merge(edge_table, cor_edge_table, by="merge_by", all.x=TRUE)
+	
+	# For some reason, Cytoscape merges the tables of the new network with that of the old network
+	# if the old one is not deleted. There's probably a better way around this, but for now this
+	# workaround will have to do.
+	user_prompt = "Are you finished with the current network(s)? It/They must be deleted"
+	user_prompt = paste(user_prompt, "before constructing the next one.", sep="\n")
+	user_prompt = paste(user_prompt, "Hit <Enter> when finished to proceed.", sep="\n")
+	a = robust_readline(user_prompt)
+	deleteAllNetworks()
+	
+	# Exporting the network to Cytoscape
+	WGCNA_to_cytoscape_fn(
+	edge_table,
+	node_table,
+	edge_table_source_col_name="fromAltName",
+	edge_table_target_col_name="toAltName",
+	edge_table_filename=edge_table_filename, #Must include full path for Cytoscape
+	node_table_filename=node_table_filename #Must include full path for Cytoscape
+	)
+	
+	# Applying generic aesthetics
+	if (add_generic_aesthetics){
+		network_aesthetics_fn(
+			genotypes=pie_genotypes,
+			Dir=Dir,
+			edge_table=edge_table, 
+			genotype_col_lst=genotype_col_lst,
+			edge_col_vec=edge_col_vec,
+			node_bord_col_vec=node_bord_col_vec,
+			node_table=node_table
+		)
+	}
+	
+	# Renaming the network
+	renameNetwork(cytoscape_session_filename)
+	
+	# Saving the Cytoscape session
+	saveSession(filename=cytoscape_session_filename)
+	print(sprintf("Saved Cytoscape session to %s", cytoscape_session_filename))
+	
+	# The yFiles layouts are applied manually here, since they cannot be automated
+	# due to copyright restrictions. Note that the exact layout depends on a random seed,
+	# so it can be changed somewhat by reapplying the layout.	
+	user_prompt = "You may now manually customize the network (e.g. with yFiles or MCODE)."
+	user_prompt = paste(user_prompt, "Hit <Enter> when finished to both save the Cytoscape", sep="\n")
+	user_prompt = paste(user_prompt, "session and export the network to .pdf.", sep="\n")
+	a = robust_readline(user_prompt)
+	
+	# Saving the Cytoscape session
+	sink(file("messages.Rout", open = "wt"), type="message") #Divert "This file has been overwritten" message to a file
+	saveSession(filename=cytoscape_session_filename)
+	sink(type="message") #Redirect messages to console again
+	print(sprintf("Saved Cytoscape session to %s", cytoscape_session_filename))
+	
+	# Exporting the Cytoscape network to a .pdf
+	Network_to_pdf_fn(network_image_filename)
+	print(sprintf("Saved network image to %s", network_image_filename))
+	
+    return(
+		list(
+			"datExpr"=init_lst[["datExpr"]],
+			"datExpr_sub"=init_lst[["datExpr_sub"]],
+			"SFT_plt_lst"=init_lst[["SFT_plt_lst"]],
+			"TOM"=init_lst[["TOM"]],
+			"chosen_power"=init_lst[["chosen_power"]],
+			"node_table"=node_table, 
+			"edge_table"=edge_table,
+			"cor_edge_table"=cor_edge_table,
+			"Tniche_lst"=Tniche_lst,
+			"Tniche_lst_up"=Tniche_lst_up
+		)
+	)
+}
+
+
+
+#############################################################################################
+#									WGCNA NETWORKS
+#############################################################################################
+
+RedDiv_df = RedDiv_df_lst[["Male"]]
+AddEpi_df = AddEpi_df_lst[["Male"]]
+
+# Defining redundant genes as those which are not significantly diverse 
+redundant_Tniche_FlyBase_ID_vec = RedDiv_df[["FlyBase_ID"]][!RedDiv_df[[Sig_Div_colname]]]
+
+# Defining redundant genes as those which are significantly diverse
+diverse_Tniche_FlyBase_ID_vec = RedDiv_df[["FlyBase_ID"]][RedDiv_df[[Sig_Div_colname]]]
+
+# Defining additive genes as those which are not significantly epistatic
+additive_Tniche_FlyBase_ID_vec = AddEpi_df[["FlyBase_ID"]][!AddEpi_df[[Sig_Epi_colname]]]
+
+# Defining epistatic genes as those which are significantly epistatic
+epistatic_Tniche_FlyBase_ID_vec = AddEpi_df[["FlyBase_ID"]][AddEpi_df[[Sig_Epi_colname]]]
+
+Master_Tniche_lst_Red = Master_Tniche_lst
+for (genotype in Full_Tniche_genotype_vec){
+	TNdf = Master_Tniche_lst_Red[["Male"]][["Directionless"]][[genotype]]
+	sel_vec = TNdf[["FlyBase_ID"]] %in% redundant_Tniche_FlyBase_ID_vec
+	TNdf = TNdf[sel_vec,]
+	Master_Tniche_lst_Red[["Male"]][["Directionless"]][[genotype]] = TNdf
+}
+
+Master_Tniche_lst_Div = Master_Tniche_lst
+for (genotype in Full_Tniche_genotype_vec){
+	TNdf = Master_Tniche_lst_Div[["Male"]][["Directionless"]][[genotype]]
+	sel_vec = TNdf[["FlyBase_ID"]] %in% diverse_Tniche_FlyBase_ID_vec
+	TNdf = TNdf[sel_vec,]
+	Master_Tniche_lst_Div[["Male"]][["Directionless"]][[genotype]] = TNdf
+}
+
+Master_Tniche_lst_Add = Master_Tniche_lst
+for (genotype in Full_Tniche_genotype_vec){
+	TNdf = Master_Tniche_lst_Add[["Male"]][["Directionless"]][[genotype]]
+	sel_vec = TNdf[["FlyBase_ID"]] %in% additive_Tniche_FlyBase_ID_vec
+	TNdf = TNdf[sel_vec,]
+	Master_Tniche_lst_Add[["Male"]][["Directionless"]][[genotype]] = TNdf
+}
+
+Master_Tniche_lst_Epi = Master_Tniche_lst
+for (genotype in Full_Tniche_genotype_vec){
+	TNdf = Master_Tniche_lst_Epi[["Male"]][["Directionless"]][[genotype]]
+	sel_vec = TNdf[["FlyBase_ID"]] %in% epistatic_Tniche_FlyBase_ID_vec
+	TNdf = TNdf[sel_vec,]
+	Master_Tniche_lst_Epi[["Male"]][["Directionless"]][[genotype]] = TNdf
+}
+
+
+# Obp50a-d, Pos: threshold = .16
+# Redundant (not Div): threshold = .16
+# # Redundant (not Div and CoV < 0.2): threshold = .11
+# Diverse: threshold = .06
+# Additive: threshold = .16
+# Epistatic: threshold = .06
+
+network_folder = "WGCNA Networks"
+create_folder_fn(network_folder)
+
+SFT_plt_folder = paste(network_folder, "SFT plots", sep="/")
+network_image_folder = paste(network_folder, "WGCNA images", sep="/")
+cytoscape_session_folder = paste(network_folder, "Cytoscape Sessions", sep="/")
+TOM_folder = paste(network_folder, "Topological Overlap Matrices", sep="/")
+
+create_folder_fn(SFT_plt_folder)
+create_folder_fn(network_image_folder)
+create_folder_fn(cytoscape_session_folder)
+create_folder_fn(TOM_folder)
+
+
+# Obp50abcdPos Network
+	genotypes_1 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .16
+	TOM_filename = "Obp50abcdPos_10_TOM.RData"
+	SFT_plt_filename = "Obp50abcdPos_10_SFT_plt"
+	cytoscape_session_filename = "Obp50abcdPos_10_0.16.cys"
+	network_image_filename = "Obp50abcdPos_10_0.16.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=TRUE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+
+
+# Redundant Network
+	genotypes_1 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .16
+	TOM_filename = "Obp50abcdPos_10_TOM.RData"
+	SFT_plt_filename = "Obp50abcdPos_10_SFT_plt"
+	cytoscape_session_filename = "Obp50abcdPos_Redundant_10_0.16.cys"
+	network_image_filename = "Obp50abcdPos_Redundant_10_0.16.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst_Red,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=FALSE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+
+# Diverse Network
+	genotypes_1 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .06
+	TOM_filename = "Obp50abcdPos_10_TOM.RData"
+	SFT_plt_filename = "Obp50abcdPos_10_SFT_plt"
+	cytoscape_session_filename = "Obp50abcdPos_Diverse_10_0.06.cys"
+	network_image_filename = "Obp50abcdPos_Diverse_10_0.06.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst_Div,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=FALSE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+# Additive Network
+	genotypes_1 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .16
+	TOM_filename = "Obp50abcdPos_10_TOM.RData"
+	SFT_plt_filename = "Obp50abcdPos_10_SFT_plt"
+	cytoscape_session_filename = "Obp50abcdPos_Additive_10_0.16.cys"
+	network_image_filename = "Obp50abcdPos_Additive_10_0.16.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst_Add,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=FALSE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+# Epistatic Network
+	genotypes_1 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .06
+	TOM_filename = "Obp50abcdPos_10_TOM.RData"
+	SFT_plt_filename = "Obp50abcdPos_10_SFT_plt"
+	cytoscape_session_filename = "Obp50abcdPos_Epistatic_10_0.06.cys"
+	network_image_filename = "Obp50abcdPos_Epistatic_10_0.06.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst_Epi,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=FALSE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+
+
+# Obp50a Network
+	genotypes_1 = c("Obp50a")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 10
+	threshold = .29
+	TOM_filename = "Obp50a_10_TOM.RData"
+	SFT_plt_filename = "Obp50a_10_SFT_plt"
+	cytoscape_session_filename = "Obp50a_10_0.29.cys"
+	network_image_filename = "Obp50a_10_0.29.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=TRUE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+
+# Obp50c Network
+	genotypes_1 = c("Obp50c")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 12
+	threshold = 0.14
+	TOM_filename = "Obp50c_12_TOM.RData"
+	SFT_plt_filename = "Obp50c_12_SFT_plt"
+	cytoscape_session_filename = "Obp50c_12_0.14.cys"
+	network_image_filename = "Obp50c_12_0.14.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=TRUE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
+
+# Obp50d Network
+	genotypes_1 = c("Obp50d")
+	genotypes_2 = c("Obp50a", "Obp50b", "Obp50c", "Obp50d", "Obp50Pos")
+	genotypes_3 = c("Obp50Pos", "Obp50Neg")
+	corType = "bicor"
+	chosen_power = 14
+	threshold = 0.16
+	TOM_filename = "Obp50d_14_TOM.RData"
+	SFT_plt_filename = "Obp50d_14_SFT_plt"
+	cytoscape_session_filename = "Obp50d_14_0.16.cys"
+	network_image_filename = "Obp50d_14_0.16.pdf"
+	
+	network_output_lst = General_network_fn(
+	Master_Tniche_lst=Master_Tniche_lst,
+	Sex="Male", 
+	Dir="Directionless",
+	genotypes_1=genotypes_1,
+	genotypes_2=genotypes_2,
+	genotypes_3=genotypes_3,
+	col_info_df=col_info_df,
+	row_info_df=row_info_df,
+	norm_counts_mat=norm_counts_mat,
+	chosen_power=chosen_power,
+	corType = corType,
+	load_TOM=TRUE,
+	threshold=threshold,
+	edge_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	node_table_filename=NULL, #If not NULL, must include full path for Cytoscape
+	add_generic_aesthetics=TRUE,
+	genotype_col_lst=genotype_col_lst,
+	edge_col_vec=edge_col_vec,
+	node_bord_col_vec=node_bord_col_vec,
+	cytoscape_session_filename=paste(cytoscape_session_folder, cytoscape_session_filename, sep="/"),
+	network_image_filename=paste(network_image_folder, network_image_filename, sep="/"),
+	generate_SFT_plt=TRUE,
+	TOM_filename=paste(TOM_folder, TOM_filename, sep="/"),
+	SFT_plt_filename=paste(SFT_plt_folder, SFT_plt_filename, sep="/")
+	)
+
+
